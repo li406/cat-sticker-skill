@@ -46,9 +46,12 @@ def _build_request_body(req: SeedreamRequest, model: str, api_key: str) -> dict:
         "sequential_image_generation": "disabled",
     }
     if req.reference_images:
-        # Seedream expects reference images as a single base64 data URI
-        b64 = base64.b64encode(req.reference_images[0]).decode()
-        body["image"] = f"data:image/png;base64,{b64}"
+        # Seedream supports single image (string) or multiple images (array)
+        images = []
+        for img_bytes in req.reference_images:
+            b64 = base64.b64encode(img_bytes).decode()
+            images.append(f"data:image/png;base64,{b64}")
+        body["image"] = images if len(images) > 1 else images[0]
     return body
 
 

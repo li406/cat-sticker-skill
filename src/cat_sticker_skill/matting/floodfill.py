@@ -67,6 +67,20 @@ def remove_solid_background(
     # Set alpha to 0 for connected background
     data[visited, 3] = 0
 
+    # Edge feathering: blur alpha channel to eliminate white halo
+    from PIL import ImageFilter
+    img_out = Image.fromarray(data, "RGBA")
+    r_ch, g_ch, b_ch, a_ch = img_out.split()
+    a_blurred = a_ch.filter(ImageFilter.GaussianBlur(radius=1.5))
+    a_orig = np.array(a_ch)
+    a_blur = np.array(a_blurred)
+    new_alpha = np.minimum(a_orig, a_blur)
+    rgb = np.array(img_out.convert("RGB"))
+    near_white = (rgb[:,:,0] > 220) & (rgb[:,:,1] > 220) & (rgb[:,:,2] > 220)
+    new_alpha[near_white & (new_alpha < 200)] = 0
+    a_final = Image.fromarray(new_alpha)
+    img_out = Image.merge("RGBA", (r_ch, g_ch, b_ch, a_final))
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(data, "RGBA").save(output_path, "PNG")
+    img_out.save(output_path, "PNG")
     return output_path

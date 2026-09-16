@@ -45,6 +45,36 @@ PRIVATE_PATH_PATTERNS = [
 ]
 
 SCAN_EXTENSIONS = {".py", ".md", ".yaml", ".yml", ".json", ".txt", ".toml", ".cfg", ".ini"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def check_image_exif(filepath: Path) -> List[PrivacyFinding]:
+    """Check image files for EXIF metadata leaks."""
+    findings: List[PrivacyFinding] = []
+    try:
+        from PIL import Image
+        img = Image.open(filepath)
+        exif = img.getexif() if hasattr(img, "getexif") else {}
+        if exif:
+            has_gps = any(tag in exif for tag in [0x8825, 0x0001, 0x0002])  # GPS tags
+            has_camera = any(tag in exif for tag in [0x010F, 0x0110])  # Make/Model
+            if has_gps:
+                findings.append(PrivacyFinding(
+                    severity="HIGH",
+                    category="exif_gps",
+                    message="Image contains GPS EXIF data",
+                    file=str(filepath),
+                ))
+            if has_camera:
+                findings.append(PrivacyFinding(
+                    severity="MEDIUM",
+                    category="exif_camera",
+                    message="Image contains camera model EXIF data",
+                    file=str(filepath),
+                ))
+    except Exception:
+        pass
+    return findings
 
 
 def scan_file(filepath: Path) -> List[PrivacyFinding]:
@@ -91,6 +121,9 @@ def scan_repo(repo_root: Path) -> PrivacyReport:
         if any(excluded in filepath.parts for excluded in exclude_dirs):
             continue
         if filepath.suffix.lower() not in SCAN_EXTENSIONS:
+            # Also check images for EXIF
+            if filepath.suffix.lower() in IMAGE_EXTENSIONS:
+                report.findings.extend(check_image_exif(filepath))
             continue
         report.findings.extend(scan_file(filepath))
 

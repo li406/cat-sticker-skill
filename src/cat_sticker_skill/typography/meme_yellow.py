@@ -1,7 +1,10 @@
 """Typography: deterministic text overlay on images.
 
-Presets are defined in assets/typography-presets/.
-The meme-yellow preset: bold yellow text with black outline at bottom center.
+Supports multiple presets:
+- meme-yellow: bold yellow + black outline (verified baseline)
+- clean-white: white text with subtle shadow
+- cute-soft: rounded soft pink/pastel
+- bold-contrast: high-contrast bold black/white
 """
 
 from __future__ import annotations
@@ -10,56 +13,87 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-
-# Default font paths to try (cross-platform)
+# Font candidates
 FONT_CANDIDATES_WINDOWS = [
     r"C:\Windows\Fonts\msyhbd.ttc",
     r"C:\Windows\Fonts\msyh.ttc",
     r"C:\Windows\Fonts\simhei.ttf",
 ]
-
 FONT_CANDIDATES_UNIX = [
     "/usr/share/fonts/opentype/noto/NotoSansSC-Bold.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansSC-Bold.ttf",
-    "/System/Library/Fonts/PingFang.ttc",
 ]
+
+# Preset definitions
+PRESETS = {
+    "meme-yellow": {
+        "fill": (255, 210, 0),
+        "stroke": (0, 0, 0),
+        "stroke_ratio": 0.10,
+        "bottom_margin_ratio": 0.06,
+        "font_size_ratio": 0.11,
+        "long_text_scale": 0.75,
+    },
+    "clean-white": {
+        "fill": (255, 255, 255),
+        "stroke": (80, 80, 80),
+        "stroke_ratio": 0.06,
+        "bottom_margin_ratio": 0.06,
+        "font_size_ratio": 0.10,
+        "long_text_scale": 0.80,
+    },
+    "cute-soft": {
+        "fill": (255, 182, 193),
+        "stroke": (255, 255, 255),
+        "stroke_ratio": 0.08,
+        "bottom_margin_ratio": 0.06,
+        "font_size_ratio": 0.10,
+        "long_text_scale": 0.80,
+    },
+    "bold-contrast": {
+        "fill": (255, 255, 255),
+        "stroke": (0, 0, 0),
+        "stroke_ratio": 0.12,
+        "bottom_margin_ratio": 0.06,
+        "font_size_ratio": 0.12,
+        "long_text_scale": 0.70,
+    },
+}
 
 
 def _find_font() -> str:
-    """Find an available bold Chinese font."""
     import platform
-
     candidates = FONT_CANDIDATES_WINDOWS if platform.system() == "Windows" else FONT_CANDIDATES_UNIX
     for path in candidates:
         if Path(path).exists():
             return path
-    # Fallback to PIL default (may not support CJK)
     return ""
 
 
-def compose_meme_yellow(
+def compose_text(
     input_path: Path,
     output_path: Path,
     text: str,
+    preset: str = "meme-yellow",
     bottom_margin_ratio: float = 0.06,
-    font_size_ratio: float = 0.11,
-    long_text_scale: float = 0.75,
 ) -> Path:
-    """Add meme-style yellow bold text with black outline at bottom center.
+    """Add text to image using named preset.
 
-    This is the verified v2 preset from the owner's workflow.
+    Supports multi-line text (split by \\n).
     """
+    p = PRESETS.get(preset, PRESETS["meme-yellow"])
+
     img = Image.open(input_path).convert("RGBA")
     w, h = img.size
     draw = ImageDraw.Draw(img)
-
     font_path = _find_font()
 
-    # Adaptive font size based on text length
-    base_size = int(w * font_size_ratio)
-    char_count = len(text)
+    lines = text.split("\n") if "\n" in text else [text]
+    char_count = max(len(l) for l in lines)
+
+    base_size = int(w * p["font_size_ratio"])
     if char_count > 8:
-        font_size = int(base_size * long_text_scale)
+        font_size = int(base_size * p["long_text_scale"])
     elif char_count > 6:
         font_size = int(base_size * 0.85)
     else:
@@ -70,24 +104,31 @@ def compose_meme_yellow(
     except Exception:
         font = ImageFont.load_default()
 
-    # Measure text
-    bbox = draw.textbbox((0, 0), text, font=font, stroke_width=max(2, font_size // 10))
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
+    stroke_w = max(3, int(font_size * p["stroke_ratio"]))
+
+    # Measure total text block
+    line_heights = []
+    line_widths = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke_w)
+        line_widths.append(bbox[2] - bbox[0])
+        line_heights.append(bbox[3] - bbox[1])
+
+    total_h = sum(line_heights) + (len(lines) - 1) * int(font_size * 0.15)
+    max_w = max(line_widths)
 
     # Position: bottom center
-    x = (w - tw) // 2 - bbox[0]
-    y = h - th - int(h * bottom_margin_ratio)
+    start_y = h - total_h - int(h * bottom_margin_ratio)
 
-    # Draw with yellow fill and black outline
-    stroke_w = max(3, font_size // 10)
-    draw.text(
-        (x, y), text,
-        font=font,
-        fill=(255, 210, 0),
-        stroke_width=stroke_w,
-        stroke_fill=(0, 0, 0),
-    )
+    y = start_y
+    for i, line in enumerate(lines):
+        x = (w - line_widths[i]) // 2
+        draw.text(
+            (x, y), line,
+            font=font, fill=p["fill"],
+            stroke_width=stroke_w, stroke_fill=p["stroke"],
+        )
+        y += line_heights[i] + int(font_size * 0.15)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_path, "PNG")

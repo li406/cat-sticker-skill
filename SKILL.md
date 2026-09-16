@@ -83,6 +83,25 @@ Run the export script to produce:
 - 750×400 banner
 - ZIP package
 
+## Interaction Rules (User Experience)
+
+The Skill executes mechanical steps, but the Agent must interact proactively:
+
+1. **Before spending money**: Tell the user exactly how many images will be generated and estimated cost (e.g., "3 images × 0.25元 = ~0.75元"). Ask for confirmation.
+
+2. **After each major step**: Show the user what was produced — don't just say "done". Display:
+   - The generated images (or previews)
+   - What step was completed
+   - Ask: "Does this look good? Any adjustments?"
+
+3. **API key handling**: If `ARK_API_KEY` is not set, ask the user to provide it. The user typically pastes it directly in chat. Never ask them to set environment variables manually.
+
+4. **Per-sticker feedback loop**: After generating all stickers, show the contact sheet. If the user wants changes (e.g., better caption, different pose), only regenerate the affected sticker.
+
+5. **Banner generation**: The banner (750×400) is generated using the host Agent's built-in image generation tool (not the paid Seedream API). It should be shown to the user before packaging.
+
+6. **Don't over-explain internals**: Report progress in user-friendly terms, not code-level details.
+
 ## Safety Rules
 
 - API key is never logged, displayed, or written to files

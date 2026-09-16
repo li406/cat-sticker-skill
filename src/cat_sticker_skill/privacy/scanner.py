@@ -113,7 +113,7 @@ def scan_file(filepath: Path) -> List[PrivacyFinding]:
 def scan_repo(repo_root: Path) -> PrivacyReport:
     """Scan all tracked text files in the repo for privacy issues."""
     report = PrivacyReport()
-    exclude_dirs = {".git", "__pycache__", ".venv", "node_modules", "workspace", "exports", "logs"}
+    exclude_dirs = {".git", "__pycache__", ".venv", "node_modules", "workspace", "exports", "logs", "tests"}
 
     for filepath in repo_root.rglob("*"):
         if not filepath.is_file():

@@ -1,0 +1,40 @@
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Workspace (private, outside repo by design)
+workspace/
+exports/
+logs/
+
+# Local private fixtures
+local/
+private/
+tests/private-fixtures/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# CI artifacts
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage

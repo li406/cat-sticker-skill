@@ -1,0 +1,14 @@
+preset: meme-yellow
+description: Real-photo meme style, bold yellow text with black outline
+font:
+  family: "Noto Sans SC"
+  weight: bold
+  fallback: "Microsoft YaHei Bold"
+fill_color: [255, 210, 0]
+stroke_color: [0, 0, 0]
+stroke_width_ratio: 0.10
+anchor: bottom
+bottom_margin_ratio: 0.06
+font_size_ratio: 0.11
+long_text_scale: 0.75
+align: center

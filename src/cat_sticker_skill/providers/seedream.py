@@ -31,8 +31,8 @@ class SeedreamRequest:
     prompt: str
     reference_images: List[bytes] = field(default_factory=list)  # raw image bytes
     output_path: Path = field(default_factory=lambda: Path("output.png"))
-    size: str = "1024x1024"
-    response_format: str = "b64_json"
+    size: str = "2048x2048"
+    response_format: str = "url"
 
 
 def _build_request_body(req: SeedreamRequest, model: str, api_key: str) -> dict:
@@ -41,14 +41,14 @@ def _build_request_body(req: SeedreamRequest, model: str, api_key: str) -> dict:
         "prompt": req.prompt,
         "size": req.size,
         "response_format": req.response_format,
+        "watermark": False,
+        "stream": False,
+        "sequential_image_generation": "disabled",
     }
     if req.reference_images:
-        # Seedream expects reference images as base64 data URLs
-        images = []
-        for img_bytes in req.reference_images:
-            b64 = base64.b64encode(img_bytes).decode()
-            images.append(f"data:image/png;base64,{b64}")
-        body["image"] = images if len(images) > 1 else images[0]
+        # Seedream expects reference images as a single base64 data URI
+        b64 = base64.b64encode(req.reference_images[0]).decode()
+        body["image"] = f"data:image/png;base64,{b64}"
     return body
 
 
@@ -87,15 +87,18 @@ def generate_image(
                 last_error = "No image in response"
                 continue
 
-            img_b64 = images[0].get("b64_json") or images[0].get("url")
-            if not img_b64:
+            img_url = images[0].get("url")
+            img_b64 = images[0].get("b64_json")
+
+            if img_url:
+                # Download the image from URL
+                with urllib.request.urlopen(img_url, timeout=timeout) as img_resp:
+                    img_bytes = img_resp.read()
+            elif img_b64:
+                img_bytes = base64.b64decode(img_b64)
+            else:
                 last_error = "No image data in response"
                 continue
-
-            if img_b64.startswith("data:"):
-                img_b64 = img_b64.split(",", 1)[1]
-
-            img_bytes = base64.b64decode(img_b64)
             req.output_path.parent.mkdir(parents=True, exist_ok=True)
             req.output_path.write_bytes(img_bytes)
 
@@ -108,21 +111,26 @@ def generate_image(
             )
 
         except urllib.error.HTTPError as e:
+            error_body = ""
+            try:
+                error_body = e.read().decode("utf-8")[:500]
+            except Exception:
+                pass
             if e.code in (401, 403):
                 return GenerationResult(
                     success=False,
-                    error=f"Auth error ({e.code}): check ARK_API_KEY",
+                    error=f"Auth error ({e.code}): check ARK_API_KEY. {error_body}",
                     retries_used=attempt,
                     duration_seconds=round(time.time() - start, 2),
                 )
             if e.code == 400:
                 return GenerationResult(
                     success=False,
-                    error=f"Bad request (400): check prompt/parameters",
+                    error=f"Bad request (400): {error_body}",
                     retries_used=attempt,
                     duration_seconds=round(time.time() - start, 2),
                 )
-            last_error = f"HTTP {e.code}"
+            last_error = f"HTTP {e.code}: {error_body}"
         except (urllib.error.URLError, TimeoutError) as e:
             last_error = f"Network: {e}"
 

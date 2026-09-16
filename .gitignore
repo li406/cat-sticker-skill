@@ -33,7 +33,8 @@ tests/private-fixtures/
 Thumbs.db
 .DS_Store
 
-# CI artifacts
+# Local test scripts
+run_phase*.py
 .pytest_cache/
 .ruff_cache/
 htmlcov/

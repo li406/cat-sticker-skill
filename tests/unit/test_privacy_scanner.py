@@ -7,7 +7,7 @@ from cat_sticker_skill.privacy import scan_repo
 
 def test_scanner_detects_fake_secret(tmp_path):
     fake_file = tmp_path / "config.py"
-    fake_file.write_text("API_KEY = 'ark-TEST-FAKE-KEY-XXXXXXXXXXXX'\n")
+    fake_file.write_text("API_KEY = 'sk-deadbeefdeadbeefdeadbeef'\n")
 
     report = scan_repo(tmp_path)
     assert report.has_high_risk

@@ -1,0 +1,6 @@
+fill: [255, 255, 255]
+stroke: [80, 80, 80]
+stroke_ratio: 0.06
+bottom_margin_ratio: 0.06
+font_size_ratio: 0.10
+long_text_scale: 0.80

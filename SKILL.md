@@ -1,6 +1,11 @@
+---
+name: cat-sticker-skill
+description: Create static cat/animal stickers from one or more reference photos. The host Agent handles visual understanding and planning; local deterministic tools handle Seedream generation, background removal, typography, validation, and WeChat packaging.
+---
+
 # Cat Sticker Skill
 
-> Agent Skill for generating static cat stickers for WeChat.
+> Agent Skill for generating static cat/animal stickers for WeChat.
 > The Agent handles visual understanding and planning; local scripts handle paid generation, deterministic image processing, and export.
 
 ## When to Use This Skill
@@ -20,7 +25,24 @@ Do NOT use this for:
 
 - `ARK_API_KEY` environment variable must be set (Volcengine / Seedream)
 - Python 3.11+ with dependencies installed (`pip install -e ".[dev]"`)
-- Workspace is at `CAT_STICKER_HOME` or `%LOCALAPPDATA%\CatStickerSkill\workspace`
+- Workspace is at `CAT_STICKER_HOME` or platform default
+- If `ARK_API_KEY` is not set, guide the user to set it as an environment variable or via a local `.env` file. **Do not ask the user to paste their API key into chat.**
+
+## Quick Start
+
+```bash
+# Verify installation and config
+cat-sticker doctor
+
+# Run a free smoke test (uses mock provider, no paid API calls)
+cat-sticker smoke-test
+
+# Create a new project
+cat-sticker project create --name "my-cats"
+
+# After the Agent builds a plan and the user approves:
+cat-sticker generate
+```
 
 ## Workflow
 
@@ -28,36 +50,33 @@ Do NOT use this for:
 
 The user provides:
 - **One or more reference photos** (cat photos)
-- Optional: captions, style preferences, number of stickers
+- Desired captions / emotions / poses
+- Whether photos are the same cat or different cats
 
-If multiple photos are provided:
-- Ask the user whether they are the **same cat** (reference group) or **different cats** (independent)
-- Never automatically merge photos into a reference group without user confirmation
+The Agent examines each photo and builds a Character Profile.
 
-### 2. Generate Character Profile
+### 2. Build a Generation Plan
 
-Visually inspect each reference photo and create a Character Profile:
-- Coat color, pattern, eye color, body type
-- Accessories (hats, collars)
-- What must be preserved vs. what should be avoided
+The Agent creates a plan:
+- Each sticker item: reference(s), caption, emotion, pose
+- Total image count
+- Estimated cost
+- **Present the plan to the user and wait for explicit approval before any paid generation.**
 
-### 3. Create Generation Plan
+### 3. Approval Gate (Hard)
 
-Before any paid image generation:
-- Design each sticker: caption, emotion, pose, composition
-- Choose typography preset (default: `meme-yellow`)
-- Show the user: total count, each caption, estimated cost
-- Wait for approval
+No paid image generation occurs until:
+- `approved_for_generation == true`
+- `approved_revision == plan_revision`
+- The run budget has not been exceeded
 
-**Default rule: no Seedream API call until the user approves the plan.**
-If the user says "just do it" / "skip approval", still build an internal plan with a hard cap on image count.
+If the plan changes (references, count, captions, poses), the approval is automatically voided.
 
-### 4. Generate Images (paid)
+### 4. Generate
 
-Call the Seedream provider script. Each request:
-- Uses reference image(s) as input
-- Prompt explicitly forbids text, letters, watermarks, logos
-- Requests pure/white background
+The controller calls the Seedream provider. Each image:
+- Uses reference images as data URIs
+- Requests pure/white background, no text
 - Saves raw output to workspace
 
 ### 5. Local Post-processing
@@ -73,34 +92,33 @@ For each generated image:
 - Show the user all stickers
 - Allow per-sticker regeneration (does not affect other stickers)
 - Preserve all versions; never overwrite
+- Allow text adjustments (offset, size, preset) without new API calls
 
 ### 7. Export WeChat Package
 
-Run the export script to produce:
-- 240×240 transparent PNG main images
+Run:
+```bash
+cat-sticker package
+```
+
+Produces:
+- 240×240 transparent PNG main images (active versions)
 - 240×240 white-background cover (no text)
 - 50×50 icon
-- 750×400 banner
+- 750×400 banner (cropped/padded from a generated image, no distortion)
+- preview contact sheet
+- validation-report.json
 - ZIP package
 
 ## Interaction Rules (User Experience)
 
 The Skill executes mechanical steps, but the Agent must interact proactively:
 
-1. **Before spending money**: Tell the user exactly how many images will be generated and estimated cost (e.g., "3 images × 0.25元 = ~0.75元"). Ask for confirmation.
-
-2. **After each major step**: Show the user what was produced — don't just say "done". Display:
-   - The generated images (or previews)
-   - What step was completed
-   - Ask: "Does this look good? Any adjustments?"
-
-3. **API key handling**: If `ARK_API_KEY` is not set, ask the user to provide it. The user typically pastes it directly in chat. Never ask them to set environment variables manually.
-
-4. **Per-sticker feedback loop**: After generating all stickers, show the contact sheet. If the user wants changes (e.g., better caption, different pose), only regenerate the affected sticker.
-
-5. **Banner generation**: The banner (750×400) is generated using the host Agent's built-in image generation tool (not the paid Seedream API). It should be shown to the user before packaging.
-
-6. **Don't over-explain internals**: Report progress in user-friendly terms, not code-level details.
+1. **Before spending money**: Tell the user exactly how many images will be generated and estimated cost. Ask for confirmation.
+2. **After each major step**: Show the user what was produced — display images/previews, state what step completed, ask for feedback.
+3. **API key**: If `ARK_API_KEY` is not set, instruct the user to set it as an environment variable. **Never ask them to paste it in chat.**
+4. **Per-sticker feedback**: Show contact sheet after generation. Regenerate only affected stickers.
+5. **Banner**: By default, the banner is deterministically cropped/padded from a verified clean image. AI-generated banners are optional and should be flagged as such.
 
 ## Safety Rules
 
@@ -109,13 +127,17 @@ The Skill executes mechanical steps, but the Agent must interact proactively:
 - Each paid generation is counted and reported
 - Maximum retries per item is capped
 - If plan changes after approval, re-approval is required
+- No secrets in error messages or debug output
 
 ## Final Report Must Include
 
 After completion, report:
+- Project ID
 - Success / failure count per sticker
 - Total paid image generations
 - Total retries
-- Output directory path
-- Validation results (PASS / WARN / FAIL)
-- Any items needing manual review
+- Estimated cost
+- Active version summary
+- Validator PASS/WARN/FAIL
+- Output path and ZIP path
+- Manual review items

@@ -35,10 +35,26 @@ class SeedreamRequest:
     response_format: str = "url"
 
 
+def _detect_mime(data: bytes) -> str:
+    """Detect image MIME type from magic bytes."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"  # fallback
+
+
 def _build_request_body(req: SeedreamRequest, model: str, api_key: str) -> dict:
+    # Always append prompt hardening
+    hardened_prompt = req.prompt + (
+        ". No text, no letters, no watermark, no logo, "
+        "no irrelevant decoration. Avoid extra limbs, avoid extra animals."
+    )
     body = {
         "model": model,
-        "prompt": req.prompt,
+        "prompt": hardened_prompt,
         "size": req.size,
         "response_format": req.response_format,
         "watermark": False,
@@ -46,11 +62,11 @@ def _build_request_body(req: SeedreamRequest, model: str, api_key: str) -> dict:
         "sequential_image_generation": "disabled",
     }
     if req.reference_images:
-        # Seedream supports single image (string) or multiple images (array)
         images = []
         for img_bytes in req.reference_images:
+            mime = _detect_mime(img_bytes)
             b64 = base64.b64encode(img_bytes).decode()
-            images.append(f"data:image/png;base64,{b64}")
+            images.append(f"data:{mime};base64,{b64}")
         body["image"] = images if len(images) > 1 else images[0]
     return body
 

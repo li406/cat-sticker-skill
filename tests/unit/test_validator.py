@@ -9,9 +9,11 @@ from cat_sticker_skill.validation.sticker import validate_main_image
 
 def test_valid_passes(tmp_path):
     path = tmp_path / "sticker.png"
-    # 240x240 RGBA with some transparency
-    img = Image.new("RGBA", (240, 240), (100, 100, 100, 255))
-    img.save(path)
+    # 240x240 RGBA with some transparent pixels
+    import numpy as np
+    arr = np.full((240, 240, 4), 100, dtype=np.uint8)
+    arr[0:10, 0:10, 3] = 0  # transparent corner
+    Image.fromarray(arr, "RGBA").save(path)
     result = validate_main_image(path)
     assert result.level in ("PASS", "WARN")
 

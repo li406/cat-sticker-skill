@@ -24,7 +24,8 @@ class TestSingleReference:
     def test_required_fields(self):
         req = SeedreamRequest(prompt="a cat")
         body = _build_request_body(req, "model-v1", "key")
-        assert body["prompt"] == "a cat"
+        assert body["prompt"].startswith("a cat")
+        assert "No text" in body["prompt"]  # hardening suffix
         assert body["size"] == "2048x2048"
         assert body["response_format"] == "url"
         assert body["watermark"] is False

@@ -1,8 +1,9 @@
-"""Privacy scanner: detect secrets, private paths, and EXIF leaks before release."""
+"""Privacy scanner: check tracked files for secrets, private paths, EXIF."""
 
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
@@ -10,10 +11,10 @@ from typing import List
 
 @dataclass
 class PrivacyFinding:
-    severity: str  # "HIGH", "MEDIUM", "LOW"
+    severity: str
     category: str
     message: str
-    file: str = ""
+    file: str
 
 
 @dataclass
@@ -29,102 +30,107 @@ class PrivacyReport:
         return not self.has_high_risk
 
 
-# Patterns that look like API keys / secrets
 SECRET_PATTERNS = [
-    (re.compile(r"ark-[a-f0-9-]{20,}", re.IGNORECASE), "Volcengine/Ark API key pattern"),
-    (re.compile(r"sk-[a-zA-Z0-9]{20,}"), "OpenAI-style API key pattern"),
-    (re.compile(r"AKIA[A-Z0-9]{16}"), "AWS access key pattern"),
-    (re.compile(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----"), "Private key block"),
+    (re.compile(r"sk-[a-zA-Z0-9]{20,}"), "secret", "OpenAI-style API key"),
+    (re.compile(r"ark-[a-zA-Z0-9-]{20,}"), "secret", "Ark/Volcengine API key"),
+    (re.compile(r"Bearer\s+[a-zA-Z0-9\-_]{20,}"), "secret", "Bearer token"),
 ]
 
-# Private path indicators
-PRIVATE_PATH_PATTERNS = [
-    re.compile(r"C:\\Users\\[^\\]+", re.IGNORECASE),
-    re.compile(r"/home/[^/]+"),
-    re.compile(r"/Users/[^/]+"),
+PATH_PATTERNS = [
+    (re.compile(r"C:\\Users\\[^\s\"']+"), "private_path", "Windows user path"),
+    (re.compile(r"/home/[^\s\"']+"), "private_path", "Linux user path"),
+    (re.compile(r"/Users/[^\s\"']+"), "private_path", "macOS user path"),
 ]
 
-SCAN_EXTENSIONS = {".py", ".md", ".yaml", ".yml", ".json", ".txt", ".toml", ".cfg", ".ini"}
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+TEXT_EXTENSIONS = {
+    ".py", ".md", ".yaml", ".yml", ".json", ".txt", ".toml", ".cfg", ".ini",
+    ".env", ".sh", ".js", ".ts", ".html", ".css", ".csv",
+}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 
 def check_image_exif(filepath: Path) -> List[PrivacyFinding]:
-    """Check image files for EXIF metadata leaks."""
     findings: List[PrivacyFinding] = []
     try:
         from PIL import Image
         img = Image.open(filepath)
         exif = img.getexif() if hasattr(img, "getexif") else {}
         if exif:
-            has_gps = any(tag in exif for tag in [0x8825, 0x0001, 0x0002])  # GPS tags
-            has_camera = any(tag in exif for tag in [0x010F, 0x0110])  # Make/Model
+            has_gps = any(tag in exif for tag in [0x8825, 0x0001, 0x0002])
+            has_camera = any(tag in exif for tag in [0x010F, 0x0110])
             if has_gps:
-                findings.append(PrivacyFinding(
-                    severity="HIGH",
-                    category="exif_gps",
-                    message="Image contains GPS EXIF data",
-                    file=str(filepath),
-                ))
+                findings.append(PrivacyFinding("HIGH", "exif_gps", "GPS EXIF data", str(filepath)))
             if has_camera:
-                findings.append(PrivacyFinding(
-                    severity="MEDIUM",
-                    category="exif_camera",
-                    message="Image contains camera model EXIF data",
-                    file=str(filepath),
-                ))
+                findings.append(PrivacyFinding("MEDIUM", "exif_camera", "Camera EXIF data", str(filepath)))
     except Exception:
         pass
     return findings
 
 
 def scan_file(filepath: Path) -> List[PrivacyFinding]:
-    """Scan a single text file for secrets and private paths."""
     findings: List[PrivacyFinding] = []
     try:
-        text = filepath.read_text(encoding="utf-8", errors="ignore")
-    except (OSError, UnicodeDecodeError):
+        content = filepath.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
         return findings
 
-    for pattern, desc in SECRET_PATTERNS:
-        if pattern.search(text):
-            findings.append(PrivacyFinding(
-                severity="HIGH",
-                category="secret",
-                message=f"Possible secret detected: {desc}",
-                file=str(filepath),
-            ))
-
-    for pattern in PRIVATE_PATH_PATTERNS:
-        for match in pattern.finditer(text):
-            # Skip if it's clearly an example/placeholder
-            matched = match.group()
-            if any(skip in matched.lower() for skip in ("example", "placeholder", "your-", "xxx")):
+    for pattern, category, desc in SECRET_PATTERNS:
+        for m in pattern.finditer(content):
+            val = m.group()
+            # Skip known test fixtures
+            if "deadbeef" in val or "your-api-key" in val or "example" in val.lower():
                 continue
-            findings.append(PrivacyFinding(
-                severity="MEDIUM",
-                category="private_path",
-                message=f"Private user path in source: {matched}",
-                file=str(filepath),
-            ))
+            findings.append(PrivacyFinding("HIGH", category, f"{desc}: {val[:15]}...", str(filepath)))
+
+    for pattern, category, desc in PATH_PATTERNS:
+        for m in pattern.finditer(content):
+            val = m.group()
+            # Skip documentation/example paths
+            if "某个用户名" in val or "username" in val.lower():
+                continue
+            findings.append(PrivacyFinding("MEDIUM", category, f"{desc}: {val}", str(filepath)))
 
     return findings
 
 
-def scan_repo(repo_root: Path) -> PrivacyReport:
-    """Scan all tracked text files in the repo for privacy issues."""
-    report = PrivacyReport()
-    exclude_dirs = {".git", "__pycache__", ".venv", "node_modules", "workspace", "exports", "logs", "tests"}
+def get_tracked_files(repo_root: Path) -> List[Path]:
+    """Get git-tracked files. Falls back to recursive walk if git fails."""
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=str(repo_root),
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            names = result.stdout.decode("utf-8", errors="ignore").split("\0")
+            return [repo_root / n for n in names if n and not n.startswith(".git")]
+    except Exception:
+        pass
+    # Fallback: walk, excluding common dirs
+    exclude = {".git", "__pycache__", ".venv", ".pytest_cache", "*.egg-info"}
+    files = []
+    for f in repo_root.rglob("*"):
+        if f.is_file() and not any(e in f.parts for e in exclude):
+            files.append(f)
+    return files
 
-    for filepath in repo_root.rglob("*"):
-        if not filepath.is_file():
+
+def scan_repo(repo_root: Path) -> PrivacyReport:
+    """Scan git-tracked files for privacy issues."""
+    report = PrivacyReport()
+    tracked = get_tracked_files(repo_root)
+
+    for filepath in tracked:
+        if not filepath.exists():
             continue
-        if any(excluded in filepath.parts for excluded in exclude_dirs):
-            continue
-        if filepath.suffix.lower() not in SCAN_EXTENSIONS:
-            # Also check images for EXIF
-            if filepath.suffix.lower() in IMAGE_EXTENSIONS:
-                report.findings.extend(check_image_exif(filepath))
-            continue
-        report.findings.extend(scan_file(filepath))
+        suffix = filepath.suffix.lower()
+        if suffix in TEXT_EXTENSIONS or filepath.name == ".env":
+            report.findings.extend(scan_file(filepath))
+        elif suffix in IMAGE_EXTENSIONS:
+            report.findings.extend(check_image_exif(filepath))
+        # Also check .env specifically
+        if filepath.name.startswith(".env") and filepath.suffix == "":
+            report.findings.extend(scan_file(filepath))
 
     return report

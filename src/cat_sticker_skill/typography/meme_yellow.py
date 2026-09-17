@@ -94,12 +94,14 @@ def compose_text(
     output_path: Path,
     text: str,
     options: TypographyOptions | None = None,
-    preset_name: str = "meme-yellow",
+    preset: str | None = None,
     bottom_margin_ratio: float = 0.06,
 ) -> Path:
-    """Add text to image using TypographyOptions."""
+    """Add text to image using TypographyOptions. preset overrides options.preset."""
     if options is None:
-        options = TypographyOptions(preset=preset_name, bottom_margin_ratio=bottom_margin_ratio)
+        options = TypographyOptions(bottom_margin_ratio=bottom_margin_ratio)
+    if preset:
+        options.preset = preset
 
     presets = load_presets()
     p = presets.get(options.preset, presets["meme-yellow"])

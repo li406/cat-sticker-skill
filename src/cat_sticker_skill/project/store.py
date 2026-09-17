@@ -38,12 +38,15 @@ def _project_dir(project_id: str) -> Path:
 
 
 def create_project(project_id: str, name: str = "") -> ProjectManifest:
-    """Create a new project on disk."""
+    """Create a new project on disk. Fails if project already exists."""
     pdir = _project_dir(project_id)
+    manifest_path = pdir / "project.json"
+    if manifest_path.exists():
+        raise FileExistsError(f"Project '{project_id}' already exists at {pdir}")
     manifest = ProjectManifest(project_id=project_id)
     data = manifest.to_dict()
     data["name"] = name
-    _atomic_write_json(pdir / "project.json", data)
+    _atomic_write_json(manifest_path, data)
     (pdir / "refs").mkdir(exist_ok=True)
     (pdir / "stickers").mkdir(exist_ok=True)
     return manifest
@@ -171,3 +174,18 @@ def load_ref_bytes(project_id: str, ref_id: str) -> bytes | None:
     if not fpath.exists():
         return None
     return fpath.read_bytes()
+
+
+def ref_sha256(project_id: str, ref_id: str) -> str | None:
+    mapping = load_ref_mapping(project_id)
+    entry = mapping.get(ref_id)
+    return entry.get("sha256") if entry else None
+
+
+def compute_file_sha256(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()

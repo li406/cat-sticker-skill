@@ -4,12 +4,14 @@ from pathlib import Path
 
 from cat_sticker_skill.providers.seedream import SeedreamRequest, _build_request_body
 
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
 
 class TestSingleReference:
     def test_single_image_is_string(self):
         req = SeedreamRequest(
             prompt="test",
-            reference_images=[b"fake_image_bytes"],
+            reference_images=[_PNG],
         )
         body = _build_request_body(req, "test-model", "test-key")
         assert isinstance(body["image"], str)
@@ -35,7 +37,7 @@ class TestMultipleReferences:
     def test_multiple_images_are_array(self):
         req = SeedreamRequest(
             prompt="test",
-            reference_images=[b"img1", b"img2"],
+            reference_images=[_PNG, _PNG],
         )
         body = _build_request_body(req, "test-model", "test-key")
         assert isinstance(body["image"], list)
@@ -45,7 +47,7 @@ class TestMultipleReferences:
     def test_many_images(self):
         req = SeedreamRequest(
             prompt="test",
-            reference_images=[b"img1", b"img2", b"img3"],
+            reference_images=[_PNG, _PNG, _PNG],
         )
         body = _build_request_body(req, "m", "k")
         assert isinstance(body["image"], list)

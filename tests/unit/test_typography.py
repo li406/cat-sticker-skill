@@ -1,4 +1,4 @@
-"""Tests for typography composition."""
+﻿"""Tests for typography composition."""
 
 from pathlib import Path
 
@@ -13,7 +13,7 @@ def test_compose_creates_output(tmp_path):
     Image.new("RGBA", (200, 200), (200, 200, 200, 255)).save(input_path)
 
     output_path = tmp_path / "output.png"
-    compose_text(input_path, output_path, "测试文字", preset_name="meme-yellow")
+    compose_text(input_path, output_path, "娴嬭瘯鏂囧瓧", preset="meme-yellow")
 
     assert output_path.exists()
     result = Image.open(output_path)
@@ -26,7 +26,7 @@ def test_text_is_visible(tmp_path):
     Image.new("RGBA", (200, 200), (255, 255, 255, 255)).save(input_path)
 
     output_path = tmp_path / "output.png"
-    compose_text(input_path, output_path, "你好", preset_name="meme-yellow")
+    compose_text(input_path, output_path, "浣犲ソ", preset="meme-yellow")
 
     result = Image.open(output_path)
     # Bottom area should have non-white pixels (the text)
@@ -36,3 +36,4 @@ def test_text_is_visible(tmp_path):
     # Some pixels should be yellow-ish (text fill)
     yellow_pixels = ((bottom[:,:,0] > 200) & (bottom[:,:,1] > 150) & (bottom[:,:,2] < 100)).sum()
     assert yellow_pixels > 0, "Should have yellow text pixels at bottom"
+

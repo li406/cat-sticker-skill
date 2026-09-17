@@ -48,13 +48,19 @@ class BudgetLedger:
 
     @property
     def retry_calls_used(self) -> int:
-        return self.failed_attempts
+        # retry = extra attempts beyond the first attempt per item
+        # For each item: attempts_sent - 1 (clamped at 0)
+        per_item: dict[str, int] = {}
+        for r in self.records:
+            per_item[r.item_id] = per_item.get(r.item_id, 0) + 1
+        return sum(max(0, n - 1) for n in per_item.values())
 
     def can_call(self, item_id: str) -> bool:
         if self.requests_sent >= self.max_total_calls:
             return False
         item_attempts = sum(1 for r in self.records if r.item_id == item_id)
-        if item_attempts >= self.max_retries_per_item:
+        # allowed: 1 initial + max_retries_per_item retries
+        if item_attempts >= 1 + self.max_retries_per_item:
             return False
         return True
 

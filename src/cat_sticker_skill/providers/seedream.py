@@ -21,7 +21,11 @@ class GenerationResult:
     success: bool
     output_path: Optional[Path] = None
     error: Optional[str] = None
+    error_class: Optional[str] = None  # auth/rate_limit/network/invalid_input/provider_rejected/invalid_image/download_failed/processing_failed
+    retryable: bool = False
+    http_status: Optional[int] = None
     request_id: Optional[str] = None
+    generated_images: int = 0
     retries_used: int = 0
     duration_seconds: float = 0.0
 
@@ -36,14 +40,14 @@ class SeedreamRequest:
 
 
 def _detect_mime(data: bytes) -> str:
-    """Detect image MIME type from magic bytes."""
+    """Detect image MIME type from magic bytes. Returns "" for unknown."""
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
     if data[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
-    return "image/png"  # fallback
+    return ""
 
 
 def _build_request_body(req: SeedreamRequest, model: str, api_key: str) -> dict:
@@ -65,6 +69,8 @@ def _build_request_body(req: SeedreamRequest, model: str, api_key: str) -> dict:
         images = []
         for img_bytes in req.reference_images:
             mime = _detect_mime(img_bytes)
+            if not mime:
+                raise ValueError("invalid_input: reference image format not recognized")
             b64 = base64.b64encode(img_bytes).decode()
             images.append(f"data:{mime};base64,{b64}")
         body["image"] = images if len(images) > 1 else images[0]
@@ -111,20 +117,49 @@ def generate_image(
 
             if img_url:
                 # Download the image from URL
-                with urllib.request.urlopen(img_url, timeout=timeout) as img_resp:
-                    img_bytes = img_resp.read()
+                try:
+                    with urllib.request.urlopen(img_url, timeout=timeout) as img_resp:
+                        img_bytes = img_resp.read()
+                except Exception as e:
+                    return GenerationResult(
+                        success=False, error=f"download_failed: {e}",
+                        error_class="download_failed", retryable=True,
+                        duration_seconds=round(time.time() - start, 2),
+                    )
             elif img_b64:
                 img_bytes = base64.b64decode(img_b64)
             else:
                 last_error = "No image data in response"
                 continue
+
+            # Validate and normalize: decode, strip metadata, re-encode as real PNG
+            try:
+                import io
+
+                from PIL import Image
+                im = Image.open(io.BytesIO(img_bytes))
+                im.verify()
+                im = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+            except Exception as e:
+                return GenerationResult(
+                    success=False, error=f"invalid_image: {e}",
+                    error_class="invalid_image", retryable=False,
+                    http_status=200,
+                    request_id=resp_data.get("id"),
+                    duration_seconds=round(time.time() - start, 2),
+                )
+
             req.output_path.parent.mkdir(parents=True, exist_ok=True)
-            req.output_path.write_bytes(img_bytes)
+            # Atomic write via temp file
+            tmp = req.output_path.with_suffix(".png.tmp")
+            im.save(tmp, "PNG")
+            tmp.replace(req.output_path)
 
             return GenerationResult(
                 success=True,
                 output_path=req.output_path,
                 request_id=resp_data.get("id"),
+                generated_images=1,
                 retries_used=attempt,
                 duration_seconds=round(time.time() - start, 2),
             )
@@ -139,6 +174,9 @@ def generate_image(
                 return GenerationResult(
                     success=False,
                     error=f"Auth error ({e.code}): check ARK_API_KEY. {error_body}",
+                    error_class="auth",
+                    retryable=False,
+                    http_status=e.code,
                     retries_used=attempt,
                     duration_seconds=round(time.time() - start, 2),
                 )
@@ -146,12 +184,36 @@ def generate_image(
                 return GenerationResult(
                     success=False,
                     error=f"Bad request (400): {error_body}",
+                    error_class="invalid_input",
+                    retryable=False,
+                    http_status=400,
                     retries_used=attempt,
                     duration_seconds=round(time.time() - start, 2),
                 )
-            last_error = f"HTTP {e.code}: {error_body}"
+            if e.code == 429:
+                return GenerationResult(
+                    success=False,
+                    error="Rate limited (429)",
+                    error_class="rate_limit",
+                    retryable=True,
+                    http_status=429,
+                    retries_used=attempt,
+                    duration_seconds=round(time.time() - start, 2),
+                )
+            if 500 <= e.code < 600:
+                last_error = f"HTTP {e.code}: {error_body}"
+            else:
+                return GenerationResult(
+                    success=False,
+                    error=f"Provider rejected ({e.code}): {error_body}",
+                    error_class="provider_rejected",
+                    retryable=False,
+                    http_status=e.code,
+                    retries_used=attempt,
+                    duration_seconds=round(time.time() - start, 2),
+                )
         except (urllib.error.URLError, TimeoutError) as e:
-            last_error = f"Network: {e}"
+            last_error = f"network: {e}"
 
         # Wait before retry
         if attempt < max_retries:
@@ -160,6 +222,8 @@ def generate_image(
     return GenerationResult(
         success=False,
         error=last_error or "Unknown error",
+        error_class="network",
+        retryable=True,
         retries_used=max_retries,
         duration_seconds=round(time.time() - start, 2),
     )

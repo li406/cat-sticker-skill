@@ -18,8 +18,8 @@ def test_detect_webp():
     assert _detect_mime(webp_bytes) == "image/webp"
 
 
-def test_detect_fallback():
-    assert _detect_mime(b"unknown") == "image/png"
+def test_detect_unknown_returns_empty():
+    assert _detect_mime(b"unknown") == ""
 
 
 def test_prompt_hardening_applied():

@@ -30,12 +30,14 @@ def test_export_creates_package(tmp_path):
     sd = tmp_path / "stickers_src"
     sd.mkdir()
     _make_sticker_dir(sd, "sticker_001")
+    banner_src = sd / "sticker_001" / "v001" / "generated.png"
 
     out = tmp_path / "pkg"
-    export_wechat_package(sd, out)
+    export_wechat_package(sd, out, banner_source=banner_src, cover_source=banner_src)
     assert (out / "stickers" / "001.png").exists()
     assert (out / "cover.png").exists()
     assert (out / "icon.png").exists()
+    assert (out / "banner.png").exists()
     assert (out / "preview.png").exists()
     assert (out / "manifest.json").exists()
     assert (out / "validation-report.json").exists()
@@ -62,9 +64,14 @@ def test_zip_package(tmp_path):
     sd = tmp_path / "stickers_src"
     sd.mkdir()
     _make_sticker_dir(sd, "sticker_001")
+    banner_src = sd / "sticker_001" / "v001" / "generated.png"
     out = tmp_path / "pkg"
-    export_wechat_package(sd, out)
-    zp = tmp_path / "out.zip"
+    export_wechat_package(sd, out, banner_source=banner_src, cover_source=banner_src)
+    zp = tmp_path / "pkg" / "out.zip"
     zip_package(out, zp)
     assert zp.exists()
     assert zp.stat().st_size > 0
+    import zipfile
+    with zipfile.ZipFile(zp) as zf:
+        names = zf.namelist()
+        assert not any(n.endswith(".zip") for n in names), f"ZIP contains itself: {names}"

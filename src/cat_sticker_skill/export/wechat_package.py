@@ -92,11 +92,13 @@ def export_wechat_package(
     # Icon (50x50 white)
     (Image.open(cover_path).resize((50, 50), Image.LANCZOS)).save(output_dir / "icon.png")
 
-    # Banner (750x400, crop/pad not stretch)
+    # Banner (750x400, crop/pad not stretch) — REQUIRED asset
     banner_path = output_dir / "banner.png"
     if banner_source and banner_source.exists():
         banner_img = Image.open(banner_source).convert("RGB")
         _crop_pad(banner_img, 750, 400).save(banner_path)
+    else:
+        raise ValueError("banner_source is required and must exist.")
 
     # Preview
     preview_path = output_dir / "preview.png"
@@ -159,9 +161,12 @@ Does not guarantee platform review approval.
 
 
 def zip_package(package_dir: Path, zip_path: Path) -> Path:
-    """Zip the package directory for upload."""
+    """Zip the package directory for upload. Excludes zip_path itself."""
+    zip_abs = zip_path.resolve()
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in sorted(package_dir.rglob("*")):
             if f.is_file():
+                if f.resolve() == zip_abs:
+                    continue
                 zf.write(f, f.relative_to(package_dir))
     return zip_path

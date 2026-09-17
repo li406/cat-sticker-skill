@@ -82,6 +82,11 @@ class ProjectController:
         if self.gate is None:
             self.load_plan()
         self.gate.approve()
+        # Snapshot reference hashes at approval time
+        mapping = store.load_ref_mapping(self.project_id)
+        self.gate.plan.approved_reference_hashes = {
+            rid: entry.get("sha256", "") for rid, entry in mapping.items()
+        }
         store.save_plan(self.gate.plan)
 
     def modify_plan(self, items: List[StickerPlanItem]) -> GenerationPlan:
@@ -120,6 +125,11 @@ class ProjectController:
         allowed, reason = self.can_generate()
         if not allowed:
             return {"success": False, "error": reason}
+
+        # Re-verify reference hashes against approved snapshot
+        hash_ok, hash_reason = self.check_ref_hashes_for_generation()
+        if not hash_ok:
+            return {"success": False, "error": hash_reason}
 
         if self.gate is None or self.plan is None:
             return {"success": False, "error": "No plan loaded."}
@@ -188,10 +198,11 @@ class ProjectController:
             # Build prompt with character
             prompt = build_seedream_prompt(item, character=character)
 
-            # Bounded retry loop
+            # Bounded retry loop: 1 initial + max_retries retries = 1+max_retries attempts
             ok = False
             max_retries = get_max_retries()
-            for attempt in range(max_retries + 1):
+            non_retryable = {"auth", "invalid_input", "invalid_image", "provider_rejected", "permission"}
+            for attempt in range(1 + max_retries):
                 if not ledger.can_call(item.id):
                     break
                 if provider_mode == "real":
@@ -206,9 +217,12 @@ class ProjectController:
                         max_retries=0,
                         timeout=get_request_timeout(),
                     )
+                    err_class = getattr(result, "error_class", None) or (
+                        type(result.error).__name__ if result.error else ""
+                    )
                     ledger.record_call(CallRecord(
                         item_id=item.id, attempt=attempt + 1, success=result.success,
-                        error_class=type(result.error).__name__ if result.error else "",
+                        error_class=err_class,
                         duration_seconds=result.duration_seconds,
                     ))
                     ok = result.success
@@ -225,15 +239,30 @@ class ProjectController:
 
                 if ok:
                     break
-                # Non-retryable errors stop immediately
-                err_cls = type(result.error).__name__ if result.error else ""
-                if err_cls in ("AuthError", "PermissionError", "InvalidRequestError"):
+                err_class = getattr(result, "error_class", None) or ""
+                if err_class in non_retryable:
                     break
 
             if ok:
-                self._post_process(item, version_dir, version)
-                results[item.id] = {"status": "done", "version": version}
-                done_count += 1
+                # Mark generated stage BEFORE postprocess so a crash doesn't re-pay
+                if item.id not in self.manifest.stickers:
+                    self.manifest.stickers[item.id] = StickerItem(id=item.id, caption=item.caption)
+                s_item = self.manifest.stickers[item.id]
+                s_item.add_version(StickerVersion(
+                    version=version,
+                    generated_file=str(raw_path),
+                ))
+                s_item.status = "generated"
+                store.save_project(self.manifest)
+                try:
+                    self._post_process(item, version_dir, version)
+                    results[item.id] = {"status": "done", "version": version}
+                    done_count += 1
+                except Exception as e:
+                    s_item.status = "processing_failed"
+                    store.save_project(self.manifest)
+                    results[item.id] = {"status": "processing_failed", "error": str(e)}
+                    fail_count += 1
             else:
                 results[item.id] = {"status": "failed"}
                 fail_count += 1
@@ -292,7 +321,7 @@ class ProjectController:
         return 1
 
     def _post_process(self, item: StickerPlanItem, version_dir: Path, version: int) -> None:
-        """Run flood-fill + typography + resize. Version is passed in, not recomputed."""
+        """Run flood-fill + typography + resize. Uses item.typography_preset."""
         from PIL import Image
 
         from cat_sticker_skill.matting.floodfill import remove_solid_background
@@ -304,7 +333,8 @@ class ProjectController:
         final = version_dir / "final_240.png"
 
         remove_solid_background(raw, cutout)
-        compose_text(cutout, composed, item.caption)
+        preset = item.typography_preset or "auto"
+        compose_text(cutout, composed, item.caption, preset=preset)
         img = Image.open(composed).convert("RGBA")
         img.resize((240, 240), Image.LANCZOS).save(final, "PNG")
 
@@ -364,10 +394,12 @@ class ProjectController:
         y_offset: int = 0,
         x_offset: int = 0,
         font_scale: float = 1.0,
+        preset: str | None = None,
     ) -> dict:
         """Re-compose text on the active version's cutout, no Seedream call.
 
         Does NOT modify generated.png or cutout.png — only composed.png and final_240.png.
+        If caption is provided, persists it to manifest sticker.caption.
         """
         validate_id(sticker_id, "sticker_id")
         item = self.manifest.stickers.get(sticker_id)
@@ -384,22 +416,165 @@ class ProjectController:
 
         from cat_sticker_skill.typography.meme_yellow import TypographyOptions, compose_text
 
+        if caption is not None:
+            item.caption = caption
+            store.save_project(self.manifest)
         text = caption if caption is not None else item.caption
         opts = TypographyOptions(
             y_offset=y_offset,
             x_offset=x_offset,
             font_scale=font_scale,
         )
-        compose_text(cutout, composed, text, options=opts)
+        compose_text(cutout, composed, text, options=opts, preset=preset)
         Image.open(composed).convert("RGBA").resize((240, 240), Image.LANCZOS).save(final, "PNG")
         return {"success": True, "file": str(final)}
+
+    # --- Character management ---
+
+    def import_character(self, char_dict: dict, replace: bool = False) -> dict:
+        """Import a CharacterProfile dict. Invalidates approval if profile changes."""
+        from cat_sticker_skill.models.character import CharacterProfile
+        cp = CharacterProfile.from_dict(char_dict)
+        cid = cp.character_id
+        existing = self.manifest.characters.get(cid)
+        if existing is not None and not replace:
+            return {"success": False, "error": f"Character {cid} already exists (use replace=True)"}
+        self.manifest.characters[cid] = cp.to_dict()
+        store.save_project(self.manifest)
+        # Invalidate approval if any plan item references this character
+        if self.plan is not None:
+            for item in self.plan.items:
+                if item.character_id == cid:
+                    self.gate.invalidate_approval() if self.gate else None
+                    store.save_plan(self.gate.plan) if self.gate else None
+                    break
+        return {"success": True, "character_id": cid}
+
+    def list_characters(self) -> List[str]:
+        return sorted(self.manifest.characters.keys())
+
+    def show_character(self, cid: str) -> Optional[dict]:
+        return self.manifest.characters.get(cid)
+
+    # --- Ref management ---
+
+    def add_ref(self, ref_id: str, src_path: Path, replace: bool = False) -> dict:
+        """Copy a reference image into project refs/, compute SHA256.
+
+        Refuses overwrite by default. Replace invalidates approval.
+        """
+        validate_id(ref_id, "ref_id")
+        src = Path(src_path)
+        if not src.exists():
+            return {"success": False, "error": f"Source not found: {src}"}
+        # Local image preflight
+        try:
+            from PIL import Image
+            with Image.open(src) as im:
+                im.verify()
+            Image.open(src).load()
+        except Exception as e:
+            return {"success": False, "error": f"invalid_input: not a readable image ({e})"}
+        # Detect MIME
+        ext = src.suffix.lower().lstrip(".")
+        mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+        mime = mime_map.get(ext, "")
+        if not mime:
+            return {"success": False, "error": "invalid_input: unsupported image format"}
+        mapping = store.load_ref_mapping(self.project_id)
+        if ref_id in mapping and not replace:
+            return {"success": False, "error": f"reference {ref_id} already exists (use --replace)"}
+        dst_name = f"{ref_id}.{ext}"
+        dst = store.refs_dir(self.project_id) / dst_name
+        dst.write_bytes(src.read_bytes())
+        sha = store.compute_file_sha256(dst)
+        size = dst.stat().st_size
+        mapping[ref_id] = {"file": f"refs/{dst_name}", "sha256": sha, "size": size}
+        store.save_ref_mapping(self.project_id, mapping)
+        # Invalidate approval on replace
+        if replace and self.plan is not None:
+            for item in self.plan.items:
+                if ref_id in item.reference_ids:
+                    if self.gate:
+                        self.gate.invalidate_approval()
+                        store.save_plan(self.gate.plan)
+                    break
+        return {"success": True, "ref_id": ref_id, "sha256": sha, "size": size}
+
+    # --- Plan import ---
+
+    def import_plan(self, plan_dict: dict) -> dict:
+        """Import a GenerationPlan from dict. Forces approved=False."""
+        items = []
+        seen_ids = set()
+        for raw in plan_dict.get("items", []):
+            pid = raw.get("id", "")
+            if not ID_PATTERN.match(pid):
+                return {"success": False, "error": f"invalid_input: bad sticker id {pid!r}"}
+            if pid in seen_ids:
+                return {"success": False, "error": f"invalid_input: duplicate sticker id {pid}"}
+            seen_ids.add(pid)
+            ref_ids = raw.get("reference", {}).get("ids", [])
+            if not ref_ids:
+                return {"success": False, "error": f"invalid_input: {pid} has empty reference group"}
+            available_refs = set(store.load_ref_mapping(self.project_id).keys())
+            missing = [r for r in ref_ids if r not in available_refs]
+            if missing:
+                return {"success": False, "error": f"invalid_input: {pid} references missing {missing}"}
+            cid = raw.get("character_id")
+            if cid and cid not in self.manifest.characters:
+                return {"success": False, "error": f"invalid_input: {pid} references unknown character {cid}"}
+            items.append(StickerPlanItem(
+                id=pid,
+                reference_type=raw.get("reference", {}).get("type", "image"),
+                reference_ids=ref_ids,
+                caption=raw.get("caption", ""),
+                emotion=raw.get("emotion", ""),
+                pose=raw.get("pose", ""),
+                composition=raw.get("composition", ""),
+                identity_priority=raw.get("identity_priority", "high"),
+                typography_preset=raw.get("typography_preset", "auto"),
+                status="planned",
+                theme=raw.get("theme", ""),
+                negative_constraints=raw.get("negative_constraints", []),
+                character_id=cid,
+            ))
+        # Force approved=False
+        plan = GenerationPlan(project_id=self.project_id, items=items)
+        plan.approved_for_generation = False
+        plan.approved_revision = 0
+        self.plan = plan
+        self.gate = ApprovalGate(plan)
+        for item in items:
+            if item.id not in self.manifest.stickers:
+                self.manifest.stickers[item.id] = StickerItem(id=item.id, caption=item.caption)
+            else:
+                self.manifest.stickers[item.id].caption = item.caption
+                self.manifest.stickers[item.id].status = "planned"
+        store.save_project(self.manifest)
+        store.save_plan(plan)
+        return {"success": True, "items": len(items), "approved": False}
 
     # --- Resume ---
 
     def resume_pending(self) -> List[str]:
-        """Return list of sticker IDs that need (re)generation."""
+        """Return list of sticker IDs that need (re)generation or local postprocess."""
         pending = []
         for sid, item in self.manifest.stickers.items():
-            if item.status in ("planned", "failed") or item.active_version == 0:
+            if item.status in ("planned", "failed", "processing_failed") or item.active_version == 0:
                 pending.append(sid)
         return pending
+
+    def check_ref_hashes_for_generation(self) -> tuple[bool, str]:
+        """Recompute ref SHA256 and compare against approved snapshot."""
+        if self.gate is None:
+            return False, "No gate"
+        approved_hashes = getattr(self.gate.plan, "approved_reference_hashes", {})
+        if not approved_hashes:
+            return True, ""
+        mapping = store.load_ref_mapping(self.project_id)
+        for ref_id, expected in approved_hashes.items():
+            actual = mapping.get(ref_id, {}).get("sha256")
+            if actual != expected:
+                return False, f"approval_required: reference {ref_id} changed since approval"
+        return True, ""

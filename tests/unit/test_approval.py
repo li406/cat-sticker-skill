@@ -55,6 +55,11 @@ def test_budget_exhaustion():
 
 
 def test_retry_limit_per_item():
+    # Semantics: 1 initial + max_retries retries = 1+max_retries total attempts
     ledger = BudgetLedger(planned_count=3, max_total_calls=10, max_retries_per_item=1)
     ledger.record_call(CallRecord(item_id="s001", attempt=1, success=False))
-    assert not ledger.can_call("s001")  # 1 retry used, next attempt > limit
+    # Still allowed: this is the 1st retry (2nd attempt total)
+    assert ledger.can_call("s001")
+    ledger.record_call(CallRecord(item_id="s001", attempt=2, success=False))
+    # Now blocked: 2 attempts used = 1 initial + 1 retry
+    assert not ledger.can_call("s001")

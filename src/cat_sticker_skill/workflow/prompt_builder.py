@@ -24,10 +24,20 @@ def build_seedream_prompt(
             parts.append(character.coat_pattern)
         if character.eye_color:
             parts.append(f"{character.eye_color} eyes")
+        if character.hair_length:
+            parts.append(f"hair length: {character.hair_length}")
+        if character.body_type:
+            parts.append(f"body type: {character.body_type}")
+        if character.face_shape:
+            parts.append(f"face shape: {character.face_shape}")
+        if character.distinctive_markings:
+            parts.append(f"distinctive markings: {', '.join(character.distinctive_markings)}")
         if character.accessories:
             parts.append(f"wearing {', '.join(character.accessories)}")
         if character.preserve:
             parts.append(f"preserve: {', '.join(character.preserve)}")
+        if character.avoid:
+            parts.append("negative identity: " + ", ".join(character.avoid))
     else:
         parts.append("a cat")
 

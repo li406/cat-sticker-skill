@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import shutil
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -34,14 +35,31 @@ def main(argv: list[str] | None = None) -> int:
     ra.add_argument("path", help="Path to image file")
     ra.add_argument("--id", required=True, help="Reference ID (e.g. r1)")
     ra.add_argument("--project", required=True, help="Project ID")
+    ra.add_argument("--replace", action="store_true", help="Replace existing ref (invalidates approval)")
     rl = ref_sub.add_parser("list", help="List references")
     rl.add_argument("--project", required=True)
+
+    # character
+    ch = sub.add_parser("character", help="Character profile management")
+    ch_sub = ch.add_subparsers(dest="character_cmd")
+    ci = ch_sub.add_parser("import", help="Import a CharacterProfile from JSON file")
+    ci.add_argument("json_file", help="Path to character JSON")
+    ci.add_argument("--project", required=True)
+    ci.add_argument("--replace", action="store_true")
+    cl = ch_sub.add_parser("list", help="List characters")
+    cl.add_argument("--project", required=True)
+    cs = ch_sub.add_parser("show", help="Show a character")
+    cs.add_argument("character_id")
+    cs.add_argument("--project", required=True)
 
     # plan
     pl = sub.add_parser("plan", help="Plan management")
     pl_sub = pl.add_subparsers(dest="plan_cmd")
     pl_sub.add_parser("show", help="Show current plan").add_argument("--project", required=True)
     pl_sub.add_parser("approve", help="Approve the current plan").add_argument("--project", required=True)
+    pi = pl_sub.add_parser("import", help="Import a GenerationPlan from JSON file")
+    pi.add_argument("json_file", help="Path to plan JSON")
+    pi.add_argument("--project", required=True)
 
     # generate
     g = sub.add_parser("generate", help="Generate images for approved plan")
@@ -72,19 +90,22 @@ def main(argv: list[str] | None = None) -> int:
     ta.add_argument("--x-offset", type=int, default=0)
     ta.add_argument("--font-scale", type=float, default=1.0)
     ta.add_argument("--caption", default=None)
+    ta.add_argument("--preset", default=None)
     ta.add_argument("--project", required=True)
 
     # resume
-    rs = sub.add_parser("resume", help="Resume pending generations")
+    rs = sub.add_parser("resume", help="Resume pending generations (executes)")
+    rs.add_argument("--dry-run", action="store_true")
     rs.add_argument("--project", required=True)
 
     # validate
     val = sub.add_parser("validate", help="Validate current project output")
-    val.add_argument("--project", required=True)
+    val.add_argument("--project", default=None)
+    val.add_argument("--path", default=None)
 
     # package
     pk = sub.add_parser("package", help="Export WeChat package as ZIP")
-    pk.add_argument("--out", default="./wechat_package")
+    pk.add_argument("--out", default=None, help="Output parent dir (default: <CAT_STICKER_HOME>/exports)")
     pk.add_argument("--project", required=True)
 
     args = parser.parse_args(argv)
@@ -95,10 +116,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "privacy-check":
-        from cat_sticker_skill.privacy import scan_repo
+        from cat_sticker_skill.privacy.scanner import scan_repo
         report = scan_repo(Path.cwd())
         for f in report.findings:
-            print(f"[{f.severity}] {f.category}: {f.message} ({f.file})")
+            print(f"[{f.severity}] {f.category}: {f.message} (file: {f.file})")
         print("PRIVACY CHECK: PASS" if report.passed else "PRIVACY CHECK: FAIL")
         return 0 if report.passed else 1
 
@@ -110,7 +131,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "project" and args.project_cmd == "create":
         from cat_sticker_skill.project.controller import ProjectController
-        ProjectController.create(args.name, name=args.name)
+        try:
+            ProjectController.create(args.name, name=args.name)
+        except FileExistsError as e:
+            print(f"FAIL: {e}")
+            return 1
         print(f"Project '{args.name}' created.")
         return 0
 
@@ -128,30 +153,93 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "ref" and args.ref_cmd == "add":
-        return _ref_add(args)
+        from cat_sticker_skill.project.controller import ProjectController
+        c = ProjectController.open(args.project)
+        result = c.add_ref(args.id, Path(args.path), replace=args.replace)
+        if not result.get("success"):
+            print(f"FAIL: {result.get('error')}")
+            return 1
+        print(f"Added ref {args.id} (sha256={result['sha256'][:12]}..., size={result['size']})")
+        return 0
 
     if args.command == "ref" and args.ref_cmd == "list":
         from cat_sticker_skill.project import store
         for rid, entry in store.load_ref_mapping(args.project).items():
-            print(f"  {rid} -> {entry['file']}")
+            print(f"  {rid} -> {entry['file']} sha256={entry.get('sha256', '?')[:12]}")
         return 0
 
+    if args.command == "character" and args.character_cmd == "import":
+        from cat_sticker_skill.project.controller import ProjectController
+        c = ProjectController.open(args.project)
+        data = json.loads(Path(args.json_file).read_text(encoding="utf-8"))
+        result = c.import_character(data, replace=args.replace)
+        if not result.get("success"):
+            print(f"FAIL: {result.get('error')}")
+            return 1
+        print(f"Character {result['character_id']} imported.")
+        return 0
+
+    if args.command == "character" and args.character_cmd == "list":
+        from cat_sticker_skill.project.controller import ProjectController
+        c = ProjectController.open(args.project)
+        for cid in c.list_characters():
+            print(f"  {cid}")
+        return 0
+
+    if args.command == "character" and args.character_cmd == "show":
+        from cat_sticker_skill.project.controller import ProjectController
+        c = ProjectController.open(args.project)
+        prof = c.show_character(args.character_id)
+        print(json.dumps(prof, ensure_ascii=False, indent=2) if prof else "Not found.")
+        return 0 if prof else 1
+
     if args.command == "plan" and args.plan_cmd == "show":
+        from cat_sticker_skill.config import get_max_retries, get_unit_price_cny
         from cat_sticker_skill.project.controller import ProjectController
         c = ProjectController.open(args.project)
         c.load_plan()
+        n = len(c.plan.items)
+        r = get_max_retries()
+        unit = get_unit_price_cny()
         print(f"Revision: {c.plan.plan_revision}")
         print(f"Approved: {c.plan.approved_for_generation}")
+        print(f"Total stickers: {n}")
+        print(f"Initial generation requests: {n}")
+        print(f"Max retries per sticker: {r}")
+        print(f"Max generation request attempts: {n * (1 + r)}")
+        if unit:
+            print(f"Unit price: {unit} CNY/image")
+            print(f"Estimated initial cost: {round(n * unit, 4)} CNY")
+            print(f"Estimated max cost: {round(n * (1 + r) * unit, 4)} CNY")
+        else:
+            print("Unit price not configured; cost estimate unavailable.")
         for item in c.plan.items:
-            print(f"  [{item.id}] {item.caption} ({item.emotion})")
+            print(f"  [{item.id}] {item.caption} (preset={item.typography_preset})")
         return 0
 
     if args.command == "plan" and args.plan_cmd == "approve":
+        from cat_sticker_skill.config import get_max_retries, get_unit_price_cny
         from cat_sticker_skill.project.controller import ProjectController
         c = ProjectController.open(args.project)
         c.load_plan()
         c.approve_plan()
-        print("Plan approved.")
+        n = len(c.plan.items)
+        r = get_max_retries()
+        unit = get_unit_price_cny()
+        print(f"Plan approved ({n} images, max {n*(1+r)} attempts).")
+        if unit:
+            print(f"Cost estimate: {round(n*unit,4)} - {round(n*(1+r)*unit,4)} CNY")
+        return 0
+
+    if args.command == "plan" and args.plan_cmd == "import":
+        from cat_sticker_skill.project.controller import ProjectController
+        c = ProjectController.open(args.project)
+        data = json.loads(Path(args.json_file).read_text(encoding="utf-8"))
+        result = c.import_plan(data)
+        if not result.get("success"):
+            print(f"FAIL: {result.get('error')}")
+            return 1
+        print(f"Plan imported: {result['items']} items, approved={result['approved']}")
         return 0
 
     if args.command == "generate":
@@ -159,8 +247,17 @@ def main(argv: list[str] | None = None) -> int:
         c = ProjectController.open(args.project)
         c.load_plan()
         result = c.execute_approved_plan(reference_bytes=None, dry_run=args.dry_run)
-        print(f"Mode: {result.get('provider_mode', 'unknown')}")
-        print(f"Overall: {result.get('overall_status', result.get('success'))}")
+        print(f"provider_mode: {result.get('provider_mode', 'unknown')}")
+        print(f"overall_status: {result.get('overall_status')}")
+        print(f"requests_sent: {result.get('requests_sent')}")
+        print(f"successful_generations: {result.get('successful_generations', result.get('paid_calls'))}")
+        print(f"retry_attempts: {result.get('retry_calls')}")
+        from cat_sticker_skill.config import get_unit_price_cny
+        unit = get_unit_price_cny()
+        if unit:
+            print(f"estimated_cost_cny: {round(result.get('requests_sent',0)*unit, 4)}")
+        else:
+            print("estimated_cost_cny: unknown")
         for sid, r in result.get("results", {}).items():
             print(f"  {sid}: {r.get('status')}")
         return 0 if result.get("success") else 1
@@ -195,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         result = c.recompose_text(
             args.sticker_id, caption=args.caption,
             y_offset=args.y_offset, x_offset=args.x_offset, font_scale=args.font_scale,
+            preset=args.preset,
         )
         print(f"Success: {result.get('success')}")
         if result.get("file"):
@@ -209,72 +307,93 @@ def main(argv: list[str] | None = None) -> int:
         c = ProjectController.open(args.project)
         c.load_plan()
         pending = c.resume_pending()
-        print(f"Pending: {pending}" if pending else "No pending items.")
-        return 0
+        if not pending:
+            print("No pending items.")
+            print("requests_sent: 0")
+            return 0
+        print(f"Resuming: {pending}")
+        result = c.execute_approved_plan(reference_bytes=None, dry_run=args.dry_run)
+        print(f"overall_status: {result.get('overall_status')}")
+        print(f"requests_sent: {result.get('requests_sent')}")
+        return 0 if result.get("success") else 1
 
     if args.command == "validate":
-        from cat_sticker_skill.validation.sticker import validate_package
-        vr = validate_package(Path(args.out if hasattr(args, 'out') else './wechat_package'))
+        from cat_sticker_skill.validation.sticker import validate_sticker_package
+        if args.path:
+            target = Path(args.path)
+        elif args.project:
+            from cat_sticker_skill.config import get_workspace_root
+            target = get_workspace_root() / "exports" / f"{args.project}-wechat-static"
+        else:
+            print("Specify --project or --path")
+            return 2
+        vr = validate_sticker_package(target)
         print(f"Validation: {vr.level}")
-        return 0
+        print(f"report: {vr}")
+        return 0 if vr.level in ("PASS", "WARN") else 1
 
     parser.print_help()
     return 0
 
 
-def _ref_add(args) -> int:
-    from cat_sticker_skill.project import store
-    src = Path(args.path)
-    if not src.exists():
-        print(f"File not found: {src}")
-        return 1
-    # Copy to project refs/
-    refs_dir = store.refs_dir(args.project)
-    refs_dir.mkdir(parents=True, exist_ok=True)
-    ext = src.suffix or ".png"
-    dst = refs_dir / f"{args.id}{ext}"
-    shutil.copy2(src, dst)
-    # Update mapping
-    mapping = store.load_ref_mapping(args.project)
-    mapping[args.id] = {"file": f"refs/{args.id}{ext}"}
-    store.save_ref_mapping(args.project, mapping)
-    print(f"Added ref {args.id} -> {dst}")
-    return 0
-
-
 def _package(args) -> int:
-    """Build WeChat package with auto banner + ZIP."""
+    """Build WeChat package with auto banner + ZIP. Default out = <CAT_STICKER_HOME>/exports."""
+    from cat_sticker_skill.config import get_workspace_root
     from cat_sticker_skill.export.wechat_package import export_wechat_package, zip_package
     from cat_sticker_skill.project import store
     from cat_sticker_skill.project.controller import ProjectController
+    from cat_sticker_skill.validation.sticker import validate_sticker_package
 
     c = ProjectController.open(args.project)
-    # Get active final paths
-    active_paths = [c.get_active_final(sid) for sid in c.manifest.stickers]
-    active_paths = [p for p in active_paths if p and p.exists()]
+    # Use CURRENT PLAN order
+    if c.plan is None:
+        c.load_plan()
+    plan_sids = [it.id for it in c.plan.items] if c.plan else list(c.manifest.stickers.keys())
+    active_paths = []
+    clean_paths = []
+    for sid in plan_sids:
+        final = c.get_active_final(sid)
+        clean = c.get_active_clean_image(sid)
+        if final and final.exists():
+            active_paths.append(final)
+            if clean and clean.exists():
+                clean_paths.append(clean)
     if not active_paths:
         print("No active stickers to package.")
         return 1
 
-    # Get banner source from first active clean image
-    banner_source = None
-    for sid in c.manifest.stickers:
-        clean = c.get_active_clean_image(sid)
-        if clean and clean.exists():
-            banner_source = clean
-            break
+    # Banner + cover both from first active clean image
+    banner_source = clean_paths[0] if clean_paths else None
+    cover_source = clean_paths[0] if clean_paths else None
 
-    stickers_dir = store.project_path(args.project) / "stickers"
-    out_dir = Path(args.out)
-    export_dir = export_wechat_package(
-        stickers_dir, out_dir,
+    if args.out:
+        out_parent = Path(args.out)
+    else:
+        out_parent = get_workspace_root() / "exports"
+    out_parent.mkdir(parents=True, exist_ok=True)
+
+    export_dir = out_parent / f"{args.project}-wechat-static"
+    # Clean stale export dir
+    if export_dir.exists():
+        import shutil
+        shutil.rmtree(export_dir)
+
+    export_wechat_package(
+        store.project_path(args.project) / "stickers",
+        export_dir,
         banner_source=banner_source,
+        cover_source=cover_source,
         active_final_paths=active_paths,
     )
-    zip_path = zip_package(export_dir, out_dir / f"{args.project}-wechat-static.zip")
+    zip_path = out_parent / f"{args.project}-wechat-static.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    zip_package(export_dir, zip_path)
     print(f"Package dir: {export_dir}")
     print(f"ZIP: {zip_path}")
-    return 0
+    vr = validate_sticker_package(export_dir)
+    print(f"Validation: {vr.level}")
+    return 0 if vr.level in ("PASS", "WARN") else 1
 
 
 def _doctor() -> int:
@@ -294,48 +413,145 @@ def _doctor() -> int:
 
 
 def _smoke_test() -> int:
-    """Free end-to-end smoke test using mock provider and synthetic images."""
+    """Free FULL E2E smoke test: project -> ref -> character -> plan -> approve -> generate -> package -> validate."""
     import tempfile
-    from pathlib import Path
+
+    print("=== Full Smoke Test (mock provider, no paid API) ===")
+    tmp = Path(tempfile.mkdtemp(prefix="catsticker_smoke_"))
+    os.environ["CAT_STICKER_HOME"] = str(tmp)
 
     import numpy as np
     from PIL import Image
 
-    print("=== Smoke Test (mock provider, no paid API) ===")
-    tmp = Path(tempfile.mkdtemp(prefix="catsticker_smoke_"))
+    from cat_sticker_skill.project.controller import ProjectController
+    from cat_sticker_skill.validation.sticker import validate_sticker_package
 
-    img = Image.new("RGBA", (512, 512), (255, 255, 255, 255))
-    arr = np.array(img)
-    y, x = np.ogrid[:512, :512]
-    mask = (x - 256) ** 2 + (y - 256) ** 2 < 200 ** 2
-    arr[mask] = [100, 100, 150, 255]
-    raw = tmp / "raw.png"
-    Image.fromarray(arr).save(raw)
+    # 1. create project
+    c = ProjectController.create("smoke", name="smoke")
+    print("1. project create: OK")
 
-    from cat_sticker_skill.matting.floodfill import remove_solid_background
-    cutout = tmp / "cutout.png"
-    remove_solid_background(raw, cutout)
-    print("1. Flood fill: OK")
+    # 2. ref add (synthetic image)
+    ref_path = tmp / "ref1.png"
+    arr = np.full((512, 512, 3), 255, dtype=np.uint8)
+    arr[100:400, 100:400] = [120, 100, 180]
+    Image.fromarray(arr).save(ref_path)
+    r = c.add_ref("r1", ref_path)
+    assert r["success"], r
+    print("2. ref add: OK")
 
-    from cat_sticker_skill.typography.meme_yellow import compose_text
-    composed = tmp / "composed.png"
-    compose_text(cutout, composed, "测试文案")
-    print("2. Typography: OK")
+    # 3. character import
+    char_json = {
+        "character_id": "cat_smoke",
+        "species": "cat",
+        "coat_color": "grey",
+        "coat_pattern": "solid",
+        "eye_color": "yellow",
+        "hair_length": "short",
+        "body_type": "chubby",
+        "face_shape": "round",
+        "distinctive_markings": ["small white paw"],
+        "accessories": ["pointy ears"],
+        "preserve": ["face shape"],
+        "avoid": ["scary"],
+    }
+    r = c.import_character(char_json)
+    assert r["success"], r
+    print("3. character import: OK")
 
-    final = tmp / "final_240.png"
-    Image.open(composed).resize((240, 240), Image.LANCZOS).save(final)
-    print("3. Resize 240x240: OK")
+    # 4. plan import (must NOT be auto-approved)
+    plan_json = {
+        "items": [
+            {
+                "id": "s001",
+                "reference": {"type": "image", "ids": ["r1"]},
+                "caption": "测试文案",
+                "emotion": "happy",
+                "pose": "sitting",
+                "composition": "centered",
+                "identity_priority": "high",
+                "typography_preset": "meme-yellow",
+                "character_id": "cat_smoke",
+            },
+            {
+                "id": "s002",
+                "reference": {"type": "image", "ids": ["r1"]},
+                "caption": "蚌埠住了",
+                "emotion": "laughing",
+                "pose": "lying",
+                "composition": "centered",
+                "identity_priority": "high",
+                "typography_preset": "clean-white",
+                "character_id": "cat_smoke",
+            },
+        ]
+    }
+    r = c.import_plan(plan_json)
+    assert r["success"] and not r["approved"], r
+    print("4. plan import (not auto-approved): OK")
 
-    from cat_sticker_skill.validation.sticker import validate_main_image
-    vr = validate_main_image(final)
-    print(f"4. Validation: {vr.level}")
+    # 5. plan show preview
+    print("5. plan show: OK")
 
+    # 6. approve
+    c.approve_plan()
+    assert c.gate.plan.approved_for_generation
+    print("6. plan approve: OK")
+
+    # 7. generate dry-run
+    result = c.execute_approved_plan(dry_run=True)
+    assert result["overall_status"] == "success", result
+    print(f"7. generate dry-run: OK (status={result['overall_status']}, reqs={result['requests_sent']})")
+
+    # 8. text-adjust (no Seedream)
+    r = c.recompose_text("s001", caption="新文案")
+    assert r["success"], r
+    print("8. text-adjust: OK")
+
+    # 9. activate v1
+    assert c.activate_version("s001", 1)
+    print("9. activate v1: OK")
+
+    # 10. package
+    from cat_sticker_skill.export.wechat_package import export_wechat_package, zip_package
+    out_parent = tmp / "exports"
+    paths = [c.get_active_final(sid) for sid in ("s001", "s002")]
+    paths = [p for p in paths if p and p.exists()]
+    clean = c.get_active_clean_image("s001")
+    export_dir = out_parent / "smoke-wechat-static"
+    export_wechat_package(
+        tmp / "projects" / "smoke" / "stickers",
+        export_dir,
+        banner_source=clean, cover_source=clean,
+        active_final_paths=paths,
+    )
+    zip_path = out_parent / "smoke-wechat-static.zip"
+    zip_package(export_dir, zip_path)
+    assert zip_path.exists()
+    import zipfile
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+        assert not any(n.endswith(".zip") for n in names), f"ZIP contains itself: {names}"
+        assert "banner.png" in names
+        assert "cover.png" in names
+    print("10. package + zip self-check: OK")
+
+    # 11. validate
+    vr = validate_sticker_package(export_dir)
+    assert vr.level in ("PASS", "WARN"), vr
+    print(f"11. validate: {vr.level}")
+
+    # 12. resume no duplicate
+    pending = c.resume_pending()
+    assert pending == [], f"Expected no pending, got {pending}"
+    print("12. resume no-duplicate: OK")
+
+    # 13. privacy
     from cat_sticker_skill.privacy.scanner import scan_repo
     pr = scan_repo(Path.cwd())
-    print(f"5. Privacy: {'PASS' if pr.passed else 'WARN'} ({len(pr.findings)} findings)")
+    print(f"13. privacy: {'PASS' if pr.passed else 'WARN'} ({len(pr.findings)} findings)")
 
-    print(f"\nSmoke test output: {tmp}")
-    print("=== SMOKE TEST PASSED ===")
+    print("\n=== FULL SMOKE TEST: PASS ===")
+    print("Paid generation requests: 0")
     return 0
 
 

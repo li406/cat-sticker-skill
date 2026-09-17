@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from cat_sticker_skill.models.plan import GenerationPlan
+
+
+def _plan_hash(plan: GenerationPlan) -> str:
+    """Stable hash of plan content for tamper detection."""
+    canonical = json.dumps(plan.to_dict(), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -25,19 +33,26 @@ class BudgetLedger:
     planned_count: int = 0
     max_total_calls: int = 0
     max_retries_per_item: int = 2
-    paid_calls_used: int = 0
-    retry_calls_used: int = 0
+    requests_sent: int = 0
+    successful_generations: int = 0
+    failed_attempts: int = 0
     records: List[CallRecord] = field(default_factory=list)
 
     @property
     def remaining_budget(self) -> int:
-        return max(0, self.max_total_calls - self.paid_calls_used)
+        return max(0, self.max_total_calls - self.requests_sent)
+
+    @property
+    def paid_calls_used(self) -> int:
+        return self.successful_generations
+
+    @property
+    def retry_calls_used(self) -> int:
+        return self.failed_attempts
 
     def can_call(self, item_id: str) -> bool:
-        """Check if another paid call is allowed."""
-        if self.paid_calls_used >= self.max_total_calls:
+        if self.requests_sent >= self.max_total_calls:
             return False
-        # Count attempts for this item
         item_attempts = sum(1 for r in self.records if r.item_id == item_id)
         if item_attempts >= self.max_retries_per_item:
             return False
@@ -45,10 +60,11 @@ class BudgetLedger:
 
     def record_call(self, record: CallRecord) -> None:
         self.records.append(record)
+        self.requests_sent += 1
         if record.success:
-            self.paid_calls_used += 1
+            self.successful_generations += 1
         else:
-            self.retry_calls_used += 1
+            self.failed_attempts += 1
 
 
 class ApprovalGate:
@@ -59,25 +75,26 @@ class ApprovalGate:
         self.ledger: Optional[BudgetLedger] = None
 
     def approve(self) -> None:
-        """Mark current plan revision as approved."""
+        """Mark current plan as approved."""
         self.plan.approved_for_generation = True
         self.plan.approved_revision = self.plan.plan_revision
 
     def invalidate_approval(self) -> None:
-        """Call when plan changes; approval must be renewed."""
+        """Invalidate approval and bump revision (single increment)."""
         self.plan.approved_for_generation = False
         self.plan.plan_revision += 1
 
     def can_generate(self) -> tuple[bool, str]:
-        """Check if generation is allowed. Returns (allowed, reason)."""
         if not self.plan.approved_for_generation:
             return False, "Plan not approved. Call approve() first."
         if self.plan.plan_revision != self.plan.approved_revision:
-            return False, f"Plan revision mismatch: plan={self.plan.plan_revision}, approved={self.plan.approved_revision}"
+            return False, (
+                f"Plan revision mismatch: plan={self.plan.plan_revision}, "
+                f"approved={self.plan.approved_revision}"
+            )
         return True, ""
 
     def create_ledger(self, max_total_calls: int, max_retries_per_item: int = 2) -> BudgetLedger:
-        """Create a budget ledger for a generation run."""
         self.ledger = BudgetLedger(
             run_id=f"run_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
             planned_count=self.plan.total_images,

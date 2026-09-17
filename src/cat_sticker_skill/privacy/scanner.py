@@ -80,7 +80,8 @@ def scan_file(filepath: Path) -> List[PrivacyFinding]:
             # Skip known test fixtures
             if "deadbeef" in val or "your-api-key" in val or "example" in val.lower():
                 continue
-            findings.append(PrivacyFinding("HIGH", category, f"{desc}: {val[:15]}...", str(filepath)))
+            # Do NOT print the actual secret value — just report existence
+            findings.append(PrivacyFinding("HIGH", category, f"Possible {desc} found (value redacted)", str(filepath)))
 
     for pattern, category, desc in PATH_PATTERNS:
         for m in pattern.finditer(content):
@@ -124,13 +125,15 @@ def scan_repo(repo_root: Path) -> PrivacyReport:
     for filepath in tracked:
         if not filepath.exists():
             continue
+        # Skip test fixtures — they intentionally contain fake secrets to test the scanner
+        if "tests" in filepath.parts:
+            continue
         suffix = filepath.suffix.lower()
-        if suffix in TEXT_EXTENSIONS or filepath.name == ".env":
+        # .env, .env.local, .env.production, etc. — always scan
+        is_env_file = filepath.name.startswith(".env")
+        if suffix in TEXT_EXTENSIONS or is_env_file:
             report.findings.extend(scan_file(filepath))
         elif suffix in IMAGE_EXTENSIONS:
             report.findings.extend(check_image_exif(filepath))
-        # Also check .env specifically
-        if filepath.name.startswith(".env") and filepath.suffix == "":
-            report.findings.extend(scan_file(filepath))
 
     return report

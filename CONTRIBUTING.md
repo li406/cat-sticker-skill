@@ -1,10 +1,5 @@
 # Contributing
 
-This project prioritizes the maintainer's personal workflow.
-External contributions are welcome but please:
+Issues and ideas are welcome.
 
-1. Read `MASTER-SPEC.md` before opening a PR.
-2. Do not add web UIs, GIF support, or new image providers in v1.
-3. Do not commit API keys, private photos, or personal paths.
-4. Run `pytest` and `ruff check` before submitting.
-5. New features should include tests.
+Code pull requests are not accepted until a CLA / relicensing contribution policy is established. This avoids commercial relicensing complexity due to third-party copyright.

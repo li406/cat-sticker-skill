@@ -16,35 +16,58 @@ You give the Agent one or more cat photos. It:
 ## Quick Start
 
 ```bash
-# 1. Set your API key
+# 1. Set your API key (do NOT paste it into chat)
 export ARK_API_KEY=your-key-here
 
-# 2. Install
-pip install -e ".[dev]"
+# 2. Check installation
+cat-sticker doctor
 
-# 3. Use with an AI Agent
-# Tell the Agent: "Read SKILL.md and help me make cat stickers."
+# 3. Free smoke test (no paid API)
+cat-sticker smoke-test
 ```
 
-## Project Structure
+## CLI Commands
 
-```
-├── SKILL.md              # Agent workflow SOP
-├── AGENTS.md             # Development rules for coding agents
-├── MASTER-SPEC.md        # Authoritative product/architecture spec
-├── src/cat_sticker_skill/
-├── scripts/
-├── references/
-├── assets/
-└── tests/
-```
+| Command | Description |
+|---|---|
+| `cat-sticker doctor` | Check installation and config |
+| `cat-sticker smoke-test` | Free mock E2E test |
+| `cat-sticker privacy-check` | Scan tracked files for secrets |
+| `cat-sticker project create <name>` | Create a new project |
+| `cat-sticker project list` | List projects |
+| `cat-sticker project show` | Show project details |
+| `cat-sticker plan show` | Show current plan |
+| `cat-sticker plan approve` | Approve plan |
+| `cat-sticker generate` | Generate (requires API key) |
+| `cat-sticker generate --dry-run` | Mock generate |
+| `cat-sticker regenerate <id>` | Regenerate single sticker |
+| `cat-sticker versions <id>` | List versions |
+| `cat-sticker activate-version <id> <v>` | Activate a version |
+| `cat-sticker resume` | Resume pending |
+| `cat-sticker validate` | Validate output |
+| `cat-sticker package` | Export WeChat ZIP |
+| `cat-sticker version` | Show version |
+
+## Fonts
+
+- **Windows**: uses `C:\Windows\Fonts\msyhbd.ttc` (Microsoft YaHei Bold)
+- **Linux CI**: installs `fonts-noto-cjk` via apt
+- **macOS**: uses PingFang SC if available
+
+## API Key
+
+- Set via `ARK_API_KEY` environment variable only
+- Never paste the key into chat messages
+- Never commit it to the repo
+
+## Private Photos
+
+Your cat photos stay outside the git repo in your local workspace.
 
 ## License
 
-**PolyForm Noncommercial 1.0.0** — source-available, not OSI open source.
-Commercial use requires separate permission.
+PolyForm Noncommercial 1.0.0. No commercial use without permission.
 
-## Disclaimer
+## WeChat Upload
 
-This tool helps you produce sticker images that meet common WeChat formatting
-requirements. It does not guarantee WeChat platform review approval.
+This tool helps you create the files. WeChat sticker platform approval is not guaranteed.

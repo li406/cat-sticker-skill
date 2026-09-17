@@ -93,7 +93,7 @@ def save_plan(plan: GenerationPlan) -> None:
 
 
 def load_plan(project_id: str) -> GenerationPlan:
-    """Load generation plan."""
+    """Load generation plan — round-trip all fields."""
     pdir = _project_dir(project_id)
     data = _read_json(pdir / "plan.json")
     from cat_sticker_skill.models.plan import StickerPlanItem
@@ -107,8 +107,12 @@ def load_plan(project_id: str) -> GenerationPlan:
             caption=item.get("caption", ""),
             emotion=item.get("emotion", ""),
             pose=item.get("pose", ""),
+            composition=item.get("composition", ""),
+            identity_priority=item.get("identity_priority", "high"),
             typography_preset=item.get("typography_preset", "auto"),
             status=item.get("status", "planned"),
+            theme=item.get("theme", ""),
+            negative_constraints=item.get("negative_constraints", []),
         ))
     return GenerationPlan(
         project_id=data["project_id"],

@@ -43,29 +43,39 @@ def export_wechat_package(
     cover_source: Optional[Path] = None,
     banner_source: Optional[Path] = None,
     preset_version: str = "wechat_static_v1_user_verified",
+    active_final_paths: Optional[List[Path]] = None,
 ) -> Path:
     """Build a complete WeChat static sticker package.
 
-    Uses active version from each sticker's version dirs (highest version).
-    Banner is crop/padded from banner_source, not stretched.
-    Raises ValueError if 0 stickers.
+    Args:
+        active_final_paths: If provided, use these exact final_240.png paths
+            (from controller.get_active_final). If None, falls back to
+            highest version directory per sticker.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     stickers_out = output_dir / "stickers"
     stickers_out.mkdir(exist_ok=True)
 
-    # Collect sticker main images
+    # Collect sticker main images — prefer active_final_paths
     sticker_files: List[Path] = []
-    for sticker_dir in sorted(stickers_dir.glob("sticker_*")):
-        vdirs = sorted(sticker_dir.glob("v*"))
-        if not vdirs:
-            continue
-        final = vdirs[-1] / "final_240.png"
-        if final.exists():
-            idx = sticker_dir.name.split("_")[-1]
-            dst = stickers_out / f"{idx}.png"
-            Image.open(final).save(dst)
-            sticker_files.append(dst)
+    if active_final_paths:
+        for i, fpath in enumerate(active_final_paths):
+            if fpath and fpath.exists():
+                dst = stickers_out / f"{i+1:03d}.png"
+                Image.open(fpath).save(dst)
+                sticker_files.append(dst)
+    else:
+        # Fallback: highest version (deprecated — prefer passing active paths)
+        for sticker_dir in sorted(stickers_dir.glob("sticker_*")):
+            vdirs = sorted(sticker_dir.glob("v*"))
+            if not vdirs:
+                continue
+            final = vdirs[-1] / "final_240.png"
+            if final.exists():
+                idx = sticker_dir.name.split("_")[-1]
+                dst = stickers_out / f"{idx}.png"
+                Image.open(final).save(dst)
+                sticker_files.append(dst)
 
     if not sticker_files:
         raise ValueError("No stickers found to export. Generate at least one sticker first.")

@@ -38,7 +38,7 @@ cat-sticker doctor
 cat-sticker smoke-test
 
 # Create a new project
-cat-sticker project create --name "my-cats"
+cat-sticker project create my-cats
 
 # After the Agent builds a plan and the user approves:
 cat-sticker generate

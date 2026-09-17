@@ -113,6 +113,7 @@ def load_plan(project_id: str) -> GenerationPlan:
             composition=item.get("composition", ""),
             identity_priority=item.get("identity_priority", "high"),
             typography_preset=item.get("typography_preset", "auto"),
+            matting_strategy=item.get("matting_strategy", "legacy"),
             status=item.get("status", "planned"),
             theme=item.get("theme", ""),
             negative_constraints=item.get("negative_constraints", []),
@@ -123,6 +124,7 @@ def load_plan(project_id: str) -> GenerationPlan:
         plan_revision=data.get("plan_revision", 1),
         approved_revision=data.get("approved_revision", 0),
         approved_for_generation=data.get("approved_for_generation", False),
+        approved_reference_hashes=data.get("approved_reference_hashes", {}),
         items=items,
     )
 

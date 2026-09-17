@@ -54,22 +54,41 @@ class CharacterProfile:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CharacterProfile":
-        obs = data.get("observable_features", {})
-        cons = data.get("identity_constraints", {})
+        obs = data.get("observable_features", {}) or {}
+        cons = data.get("identity_constraints", {}) or {}
+
+        def pick(key: str, default=""):
+            """Prefer nested observable_features, then flat top-level."""
+            if key in obs:
+                return obs[key]
+            return data.get(key, default)
+
+        def pick_list(key: str, default=None):
+            default = default or []
+            if key in obs:
+                return obs[key]
+            if key in cons:
+                return cons[key]
+            return data.get(key, default)
+
+        cid = data.get("character_id")
+        if not cid or not isinstance(cid, str):
+            raise ValueError("invalid_input: character_id is required and must be a string")
+
         return cls(
-            character_id=data["character_id"],
+            character_id=cid,
             display_name=data.get("display_name"),
             source_refs=data.get("source_refs", []),
-            coat_color=obs.get("coat_color", ""),
-            coat_pattern=obs.get("coat_pattern", ""),
-            eye_color=obs.get("eye_color", ""),
-            hair_length=obs.get("hair_length", ""),
-            body_type=obs.get("body_type", ""),
-            face_shape=obs.get("face_shape", ""),
-            distinctive_markings=obs.get("distinctive_markings", []),
-            accessories=obs.get("accessories", []),
-            preserve=cons.get("preserve", []),
-            avoid=cons.get("avoid", []),
+            coat_color=pick("coat_color"),
+            coat_pattern=pick("coat_pattern"),
+            eye_color=pick("eye_color"),
+            hair_length=pick("hair_length"),
+            body_type=pick("body_type"),
+            face_shape=pick("face_shape"),
+            distinctive_markings=pick_list("distinctive_markings"),
+            accessories=pick_list("accessories"),
+            preserve=pick_list("preserve"),
+            avoid=pick_list("avoid"),
             uncertain_features=data.get("uncertain_features", []),
             notes=data.get("notes", ""),
         )

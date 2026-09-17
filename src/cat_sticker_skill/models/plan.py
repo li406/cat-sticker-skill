@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -17,6 +17,7 @@ class StickerPlanItem:
     composition: str = ""
     identity_priority: str = "high"
     typography_preset: str = "auto"
+    matting_strategy: str = "legacy"  # "legacy" or "precompose"
     status: str = "planned"
     theme: Optional[str] = None
     negative_constraints: List[str] = field(default_factory=list)
@@ -32,6 +33,7 @@ class StickerPlanItem:
             "composition": self.composition,
             "identity_priority": self.identity_priority,
             "typography_preset": self.typography_preset,
+            "matting_strategy": self.matting_strategy,
             "status": self.status,
             "theme": self.theme,
             "negative_constraints": self.negative_constraints,
@@ -45,6 +47,7 @@ class GenerationPlan:
     plan_revision: int = 1
     approved_revision: int = 0
     approved_for_generation: bool = False
+    approved_reference_hashes: Dict[str, str] = field(default_factory=dict)
     items: List[StickerPlanItem] = field(default_factory=list)
 
     @property
@@ -61,5 +64,6 @@ class GenerationPlan:
             "plan_revision": self.plan_revision,
             "approved_revision": self.approved_revision,
             "approved_for_generation": self.approved_for_generation,
+            "approved_reference_hashes": self.approved_reference_hashes,
             "items": [item.to_dict() for item in self.items],
         }

@@ -30,3 +30,4 @@ jobs:
       - run: ruff check src/
       - run: pytest -q
       - run: python -m cat_sticker_skill.cli privacy-check
+      - run: python -m cat_sticker_skill.cli smoke-test

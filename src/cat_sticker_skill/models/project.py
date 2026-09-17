@@ -24,9 +24,13 @@ class StickerItem:
     active_version: int = 0
     versions: Dict[int, StickerVersion] = field(default_factory=dict)
 
-    def add_version(self, version: StickerVersion) -> None:
+    def add_version(self, version: StickerVersion, activate: bool = False) -> None:
         self.versions[version.version] = version
-        self.active_version = version.version
+        if activate:
+            self.active_version = version.version
+
+    def mark_active(self, version: int) -> None:
+        self.active_version = version
 
 
 @dataclass

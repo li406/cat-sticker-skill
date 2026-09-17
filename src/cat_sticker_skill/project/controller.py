@@ -170,6 +170,30 @@ class ProjectController:
                 results[item.id] = {"status": "skipped", "reason": "already done"}
                 continue
 
+            # --- Local recovery: generated raw exists but postprocess failed ---
+            # Do NOT call Seedream again — just re-run local postprocess.
+            if existing and existing.status in ("generated", "processing_failed"):
+                # Find the latest version with a raw generated file
+                for vnum in sorted(existing.versions.keys(), reverse=True):
+                    v = existing.versions[vnum]
+                    raw = Path(v.generated_file) if v.generated_file else None
+                    if raw and raw.exists():
+                        version_dir = raw.parent
+                        try:
+                            self._post_process(item, version_dir, vnum)
+                            results[item.id] = {"status": "done", "version": vnum, "recovered": True}
+                            done_count += 1
+                        except Exception as e:
+                            existing.status = "processing_failed"
+                            store.save_project(self.manifest)
+                            results[item.id] = {"status": "processing_failed", "error": str(e)}
+                            fail_count += 1
+                        break
+                else:
+                    # No recoverable raw — fall through to fresh generation
+                    pass
+                continue
+
             # Resolve ALL reference bytes (multi-reference support)
             ref_bytes_list = []
             missing_refs = []
@@ -244,18 +268,22 @@ class ProjectController:
                     break
 
             if ok:
-                # Mark generated stage BEFORE postprocess so a crash doesn't re-pay
+                # Mark generated stage BEFORE postprocess — do NOT activate yet
                 if item.id not in self.manifest.stickers:
                     self.manifest.stickers[item.id] = StickerItem(id=item.id, caption=item.caption)
                 s_item = self.manifest.stickers[item.id]
                 s_item.add_version(StickerVersion(
                     version=version,
                     generated_file=str(raw_path),
-                ))
+                ), activate=False)
                 s_item.status = "generated"
                 store.save_project(self.manifest)
                 try:
                     self._post_process(item, version_dir, version)
+                    # Only activate AFTER full postprocess success
+                    s_item.mark_active(version)
+                    s_item.status = "done"
+                    store.save_project(self.manifest)
                     results[item.id] = {"status": "done", "version": version}
                     done_count += 1
                 except Exception as e:
@@ -280,13 +308,13 @@ class ProjectController:
             overall = "failed"
 
         return {
-            "success": overall != "failed",
+            "success": overall == "success",
             "overall_status": overall,
             "results": results,
             "provider_mode": provider_mode,
             "requests_sent": ledger.requests_sent,
-            "paid_calls": ledger.paid_calls_used,
-            "retry_calls": ledger.retry_calls_used,
+            "successful_generations": ledger.successful_generations,
+            "retry_attempts": ledger.retry_calls_used,
             "remaining_budget": ledger.remaining_budget,
         }
 
@@ -321,7 +349,10 @@ class ProjectController:
         return 1
 
     def _post_process(self, item: StickerPlanItem, version_dir: Path, version: int) -> None:
-        """Run flood-fill + typography + resize. Uses item.typography_preset."""
+        """Run matting + typography + resize. Strategy:
+        - legacy: generated -> text -> floodfill -> final
+        - precompose: generated -> floodfill -> text -> final
+        """
         from PIL import Image
 
         from cat_sticker_skill.matting.floodfill import remove_solid_background
@@ -331,25 +362,31 @@ class ProjectController:
         cutout = version_dir / "cutout.png"
         composed = version_dir / "composed.png"
         final = version_dir / "final_240.png"
-
-        remove_solid_background(raw, cutout)
         preset = item.typography_preset or "auto"
-        compose_text(cutout, composed, item.caption, preset=preset)
+        strategy = item.matting_strategy or "legacy"
+
+        if strategy == "precompose":
+            remove_solid_background(raw, cutout)
+            compose_text(cutout, composed, item.caption, preset=preset)
+        else:  # legacy
+            compose_text(raw, composed, item.caption, preset=preset)
+            remove_solid_background(composed, cutout)
+            composed = cutout  # use cutout as final source
+
         img = Image.open(composed).convert("RGBA")
         img.resize((240, 240), Image.LANCZOS).save(final, "PNG")
 
-        # Update manifest with the EXPLICIT version number
         if item.id not in self.manifest.stickers:
             self.manifest.stickers[item.id] = StickerItem(id=item.id, caption=item.caption)
         s_item = self.manifest.stickers[item.id]
-        s_item.status = "done"
         s_item.add_version(StickerVersion(
             version=version,
             generated_file=str(raw),
             cutout_file=str(cutout),
             composed_file=str(composed),
-        ))
+        ), activate=False)
         s_item.active_version = version
+        s_item.status = "done"
         store.save_project(self.manifest)
 
     # --- Version management ---
@@ -398,8 +435,8 @@ class ProjectController:
     ) -> dict:
         """Re-compose text on the active version's cutout, no Seedream call.
 
-        Does NOT modify generated.png or cutout.png — only composed.png and final_240.png.
-        If caption is provided, persists it to manifest sticker.caption.
+        - caption change: updates manifest + plan item, invalidates approval (prompt semantic changed).
+        - preset change: persists to plan item, does NOT invalidate approval (local only).
         """
         validate_id(sticker_id, "sticker_id")
         item = self.manifest.stickers.get(sticker_id)
@@ -416,9 +453,30 @@ class ProjectController:
 
         from cat_sticker_skill.typography.meme_yellow import TypographyOptions, compose_text
 
+        approval_invalidated = False
         if caption is not None:
             item.caption = caption
+            # Update plan item caption if plan is loaded
+            if self.plan is not None:
+                for pi in self.plan.items:
+                    if pi.id == sticker_id:
+                        pi.caption = caption
+                        break
+                # Caption is part of Seedream prompt → invalidate approval
+                if self.gate:
+                    self.gate.invalidate_approval()
+                    store.save_plan(self.gate.plan)
+                    approval_invalidated = True
             store.save_project(self.manifest)
+
+        if preset is not None and self.plan is not None:
+            for pi in self.plan.items:
+                if pi.id == sticker_id:
+                    pi.typography_preset = preset
+                    break
+            if self.gate:
+                store.save_plan(self.gate.plan)
+
         text = caption if caption is not None else item.caption
         opts = TypographyOptions(
             y_offset=y_offset,
@@ -427,27 +485,50 @@ class ProjectController:
         )
         compose_text(cutout, composed, text, options=opts, preset=preset)
         Image.open(composed).convert("RGBA").resize((240, 240), Image.LANCZOS).save(final, "PNG")
-        return {"success": True, "file": str(final)}
+        return {"success": True, "file": str(final), "approval_invalidated": approval_invalidated}
 
     # --- Character management ---
+
+    def _invalidate_approval_for_ref(self, ref_id: str) -> None:
+        """Cross-process: load plan from disk if needed and invalidate approval
+        if any item references ref_id."""
+        plan_path = store.project_path(self.project_id) / "plan.json"
+        if not plan_path.exists():
+            return
+        plan = store.load_plan(self.project_id)
+        if any(ref_id in it.reference_ids for it in plan.items):
+            gate = ApprovalGate(plan)
+            gate.invalidate_approval()
+            store.save_plan(plan)
+
+    def _invalidate_approval_for_character(self, character_id: str) -> None:
+        plan_path = store.project_path(self.project_id) / "plan.json"
+        if not plan_path.exists():
+            return
+        plan = store.load_plan(self.project_id)
+        if any(it.character_id == character_id for it in plan.items):
+            gate = ApprovalGate(plan)
+            gate.invalidate_approval()
+            store.save_plan(plan)
 
     def import_character(self, char_dict: dict, replace: bool = False) -> dict:
         """Import a CharacterProfile dict. Invalidates approval if profile changes."""
         from cat_sticker_skill.models.character import CharacterProfile
-        cp = CharacterProfile.from_dict(char_dict)
+        try:
+            cp = CharacterProfile.from_dict(char_dict)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
         cid = cp.character_id
         existing = self.manifest.characters.get(cid)
         if existing is not None and not replace:
-            return {"success": False, "error": f"Character {cid} already exists (use replace=True)"}
+            return {"success": False, "error": f"Character {cid} already exists (use --replace)"}
         self.manifest.characters[cid] = cp.to_dict()
         store.save_project(self.manifest)
-        # Invalidate approval if any plan item references this character
-        if self.plan is not None:
-            for item in self.plan.items:
-                if item.character_id == cid:
-                    self.gate.invalidate_approval() if self.gate else None
-                    store.save_plan(self.gate.plan) if self.gate else None
-                    break
+        # Cross-process invalidate: always load plan from disk, not just self.plan
+        if replace:
+            self._invalidate_approval_for_character(cid)
+        elif self.plan is not None:
+            self._invalidate_approval_for_character(cid)
         return {"success": True, "character_id": cid}
 
     def list_characters(self) -> List[str]:
@@ -491,14 +572,9 @@ class ProjectController:
         size = dst.stat().st_size
         mapping[ref_id] = {"file": f"refs/{dst_name}", "sha256": sha, "size": size}
         store.save_ref_mapping(self.project_id, mapping)
-        # Invalidate approval on replace
-        if replace and self.plan is not None:
-            for item in self.plan.items:
-                if ref_id in item.reference_ids:
-                    if self.gate:
-                        self.gate.invalidate_approval()
-                        store.save_plan(self.gate.plan)
-                    break
+        # Cross-process invalidate on replace
+        if replace:
+            self._invalidate_approval_for_ref(ref_id)
         return {"success": True, "ref_id": ref_id, "sha256": sha, "size": size}
 
     # --- Plan import ---
@@ -534,6 +610,7 @@ class ProjectController:
                 composition=raw.get("composition", ""),
                 identity_priority=raw.get("identity_priority", "high"),
                 typography_preset=raw.get("typography_preset", "auto"),
+                matting_strategy=raw.get("matting_strategy", "legacy"),
                 status="planned",
                 theme=raw.get("theme", ""),
                 negative_constraints=raw.get("negative_constraints", []),
@@ -566,15 +643,22 @@ class ProjectController:
         return pending
 
     def check_ref_hashes_for_generation(self) -> tuple[bool, str]:
-        """Recompute ref SHA256 and compare against approved snapshot."""
+        """Recompute on-disk ref SHA256 and compare against approved snapshot."""
         if self.gate is None:
             return False, "No gate"
-        approved_hashes = getattr(self.gate.plan, "approved_reference_hashes", {})
+        approved_hashes = getattr(self.gate.plan, "approved_reference_hashes", {}) or {}
         if not approved_hashes:
             return True, ""
         mapping = store.load_ref_mapping(self.project_id)
+        pdir = store.project_path(self.project_id)
         for ref_id, expected in approved_hashes.items():
-            actual = mapping.get(ref_id, {}).get("sha256")
+            entry = mapping.get(ref_id)
+            if not entry:
+                return False, f"approval_required: reference {ref_id} missing from refs.json"
+            actual_path = pdir / entry["file"]
+            if not actual_path.exists():
+                return False, f"approval_required: reference {ref_id} file missing on disk"
+            actual = store.compute_file_sha256(actual_path)
             if actual != expected:
-                return False, f"approval_required: reference {ref_id} changed since approval"
+                return False, f"approval_required: reference {ref_id} bytes changed since approval"
         return True, ""

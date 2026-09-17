@@ -108,6 +108,11 @@ def main(argv: list[str] | None = None) -> int:
     pk.add_argument("--out", default=None, help="Output parent dir (default: <CAT_STICKER_HOME>/exports)")
     pk.add_argument("--project", required=True)
 
+    # matting-ab
+    ab = sub.add_parser("matting-ab", help="A/B test legacy vs precompose matting (private fixtures only)")
+    ab.add_argument("--project", required=True)
+    ab.add_argument("--output", "-o", default=None, help="Output dir for side-by-side PNGs")
+
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -302,6 +307,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "package":
         return _package(args)
 
+    if args.command == "matting-ab":
+        return _matting_ab(args)
+
     if args.command == "resume":
         from cat_sticker_skill.project.controller import ProjectController
         c = ProjectController.open(args.project)
@@ -333,6 +341,48 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if vr.level in ("PASS", "WARN") else 1
 
     parser.print_help()
+    return 0
+
+
+def _matting_ab(args) -> int:
+    """A/B compare legacy vs precompose matting on private fixtures.
+    Reads CAT_STICKER_PRIVATE_FIXTURES; SKIP (exit 0) if not configured."""
+    import os
+    fixtures_dir = os.environ.get("CAT_STICKER_PRIVATE_FIXTURES")
+    if not fixtures_dir:
+        print("SKIP: CAT_STICKER_PRIVATE_FIXTURES not set")
+        return 0
+    fdir = Path(fixtures_dir)
+    if not fdir.exists():
+        print(f"SKIP: {fdir} not found")
+        return 0
+    out_dir = Path(args.output) if args.output else fdir / "ab-out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    from cat_sticker_skill.matting.floodfill import remove_solid_background
+    from cat_sticker_skill.typography.meme_yellow import compose_text
+
+    pngs = sorted(list(fdir.glob("*.png")) + list(fdir.glob("*.jpg")))
+    if not pngs:
+        print("SKIP: no images in fixtures dir")
+        return 0
+    print(f"A/B comparing {len(pngs)} fixtures → {out_dir}")
+    for src in pngs:
+        stem = src.stem
+        try:
+            # Legacy: text → floodfill
+            leg_composed = out_dir / f"{stem}_legacy_composed.png"
+            leg_cutout = out_dir / f"{stem}_legacy_cutout.png"
+            compose_text(src, leg_composed, "测试文案")
+            remove_solid_background(leg_composed, leg_cutout)
+            # Precompose: floodfill → text
+            pre_cutout = out_dir / f"{stem}_pre_cutout.png"
+            pre_composed = out_dir / f"{stem}_pre_composed.png"
+            remove_solid_background(src, pre_cutout)
+            compose_text(pre_cutout, pre_composed, "测试文案")
+            print(f"  {stem}: legacy={leg_cutout.name} precompose={pre_composed.name}")
+        except Exception as e:
+            print(f"  {stem}: FAILED {e}")
     return 0
 
 

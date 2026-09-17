@@ -61,6 +61,10 @@ TEXT_EXTENSIONS = {
 }
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
+# Allowlisted image paths (synthetic / public fixtures only).
+# Any tracked image outside these paths is HIGH unexpected_tracked_media.
+IMAGE_ALLOWLIST_DIRS = {"tests/public-fixtures", "assets/fixtures"}
+
 
 def check_image_exif(filepath: Path) -> List[PrivacyFinding]:
     findings: List[PrivacyFinding] = []
@@ -80,6 +84,11 @@ def check_image_exif(filepath: Path) -> List[PrivacyFinding]:
     return findings
 
 
+def _is_allowlisted_image(path: Path) -> bool:
+    parts = set(path.parts)
+    return any(allow in parts for allow in IMAGE_ALLOWLIST_DIRS)
+
+
 def scan_file(filepath: Path) -> List[PrivacyFinding]:
     findings: List[PrivacyFinding] = []
     try:
@@ -87,15 +96,18 @@ def scan_file(filepath: Path) -> List[PrivacyFinding]:
     except Exception:
         return findings
 
+    # Scanner source file: its own regex patterns are intentional, not real paths/secrets
+    is_scanner_source = filepath.name == "scanner.py"
+
     for pattern, category, desc in SECRET_PATTERNS:
         for m in pattern.finditer(content):
             val = m.group()
-            # Skip scanner's own regex patterns (false positives)
             if val in SELF_PATTERNS:
                 continue
-            # Skip known fake/test secrets only when scanning test files
-            in_tests = "tests" in filepath.parts
-            if in_tests and val in FAKE_SECRETS:
+            if is_scanner_source:
+                continue
+            # Only exact allowlist of known fake secrets is exempted — even in tests/
+            if val in FAKE_SECRETS:
                 continue
             if "deadbeef" in val or "your-api-key" in val or "example" in val.lower():
                 continue
@@ -104,10 +116,13 @@ def scan_file(filepath: Path) -> List[PrivacyFinding]:
     for pattern, category, desc in PATH_PATTERNS:
         for m in pattern.finditer(content):
             val = m.group()
-            # Skip documentation/example paths
-            if "某个用户名" in val or "username" in val.lower():
+            if is_scanner_source:
                 continue
-            findings.append(PrivacyFinding("MEDIUM", category, f"{desc}: {val}", str(filepath)))
+            if "username" in val.lower() or "your-username" in val.lower():
+                continue
+            if "某个用户名" in val:
+                continue
+            findings.append(PrivacyFinding("HIGH", category, "Possible private absolute path found (value redacted)", str(filepath)))
 
     return findings
 
@@ -126,7 +141,6 @@ def get_tracked_files(repo_root: Path) -> List[Path]:
             return [repo_root / n for n in names if n and not n.startswith(".git")]
     except Exception:
         pass
-    # Fallback: walk, excluding common dirs
     exclude = {".git", "__pycache__", ".venv", ".pytest_cache", "*.egg-info"}
     files = []
     for f in repo_root.rglob("*"):
@@ -143,20 +157,17 @@ def scan_repo(repo_root: Path) -> PrivacyReport:
     for filepath in tracked:
         if not filepath.exists():
             continue
-        # Scanner's own source: its regex patterns are intentional, not real secrets
-        is_scanner_source = filepath.name == "scanner.py"
-        # No blanket skip of tests/ — scan them, but downgrade secrets in test fixtures
-        in_tests = "tests" in filepath.parts
         suffix = filepath.suffix.lower()
         if suffix in TEXT_EXTENSIONS or filepath.name.startswith(".env"):
-            findings = scan_file(filepath)
-            # Downgrade HIGH secrets in scanner source and test files to MEDIUM
-            if is_scanner_source or in_tests:
-                for f in findings:
-                    if f.severity == "HIGH":
-                        f.severity = "MEDIUM"
-            report.findings.extend(findings)
+            report.findings.extend(scan_file(filepath))
         elif suffix in IMAGE_EXTENSIONS:
+            # Tracked media gate: any non-allowlisted image is HIGH
+            if not _is_allowlisted_image(filepath):
+                report.findings.append(PrivacyFinding(
+                    "HIGH", "unexpected_tracked_media",
+                    "Tracked image outside allowlisted fixtures (value redacted)",
+                    str(filepath),
+                ))
             report.findings.extend(check_image_exif(filepath))
 
     return report

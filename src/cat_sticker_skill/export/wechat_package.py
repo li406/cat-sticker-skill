@@ -85,9 +85,8 @@ def export_wechat_package(
     if cover_source and cover_source.exists():
         img = Image.open(cover_source).convert("RGB").resize((240, 240), Image.LANCZOS)
     else:
-        first = sorted(stickers_dir.glob("sticker_*"))[0]
-        raw = sorted(first.glob("v*/generated.png"))[0]
-        img = Image.open(raw).convert("RGB").resize((240, 240), Image.LANCZOS)
+        # Fallback: use first sticker main image as cover
+        img = Image.open(sticker_files[0]).convert("RGB").resize((240, 240), Image.LANCZOS)
     img.save(cover_path)
 
     # Icon (50x50 white)

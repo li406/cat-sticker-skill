@@ -103,14 +103,15 @@ class ProjectController:
 
     def execute_approved_plan(
         self,
-        reference_bytes: dict[str, bytes],
+        reference_bytes: dict[str, bytes] | None = None,
         dry_run: bool = False,
         unit_price_cny: float | None = None,
     ) -> dict:
         """Execute generation for approved, non-completed items.
 
         Args:
-            reference_bytes: map of reference_id -> image bytes
+            reference_bytes: optional map of reference_id -> bytes.
+                If None, automatically loads from project refs/ on disk.
             dry_run: if True, use mock provider without API key
             unit_price_cny: optional cost per image
 
@@ -132,12 +133,23 @@ class ProjectController:
             }
 
         provider_mode = "mock" if dry_run or not api_key else "real"
+
+        # Auto-load reference bytes from project refs/ if not provided
+        if reference_bytes is None:
+            reference_bytes = {}
+            for ref_id in store.load_ref_mapping(self.project_id):
+                b = store.load_ref_bytes(self.project_id, ref_id)
+                if b is not None:
+                    reference_bytes[ref_id] = b
+
         ledger = self.gate.create_ledger(
             max_total_calls=self.plan.total_images * (get_max_retries() + 1),
             max_retries_per_item=get_max_retries(),
         )
 
         results = {}
+        done_count = 0
+        fail_count = 0
 
         for item in self.plan.items:
             validate_id(item.id, "sticker_id")
@@ -146,10 +158,6 @@ class ProjectController:
             existing = self.manifest.stickers.get(item.id)
             if existing and existing.status == "done" and existing.active_version > 0:
                 results[item.id] = {"status": "skipped", "reason": "already done"}
-                continue
-
-            if not ledger.can_call(item.id):
-                results[item.id] = {"status": "skipped", "reason": "budget exhausted"}
                 continue
 
             # Resolve ALL reference bytes (multi-reference support)
@@ -162,7 +170,14 @@ class ProjectController:
                     missing_refs.append(ref_id)
             if missing_refs:
                 results[item.id] = {"status": "failed", "error": f"Missing references: {missing_refs}"}
+                fail_count += 1
                 continue
+
+            # Resolve character profile
+            character = None
+            if item.character_id and item.character_id in self.manifest.characters:
+                from cat_sticker_skill.models.character import CharacterProfile
+                character = CharacterProfile.from_dict(self.manifest.characters[item.character_id])
 
             # Compute version ONCE at start
             version = self._next_version(item.id)
@@ -170,53 +185,77 @@ class ProjectController:
             version_dir.mkdir(parents=True, exist_ok=True)
             raw_path = version_dir / "generated.png"
 
-            # Build prompt
-            prompt = build_seedream_prompt(item)
+            # Build prompt with character
+            prompt = build_seedream_prompt(item, character=character)
 
+            # Bounded retry loop
             ok = False
-            if provider_mode == "real":
-                from cat_sticker_skill.providers.seedream import SeedreamRequest, generate_image
-                req = SeedreamRequest(
-                    prompt=prompt,
-                    reference_images=ref_bytes_list,
-                    output_path=raw_path,
-                )
-                result = generate_image(
-                    req, api_key=api_key, model=get_seedream_model(),
-                    max_retries=0,  # retry handled by controller loop below
-                    timeout=get_request_timeout(),
-                )
-                # Count actual HTTP attempts
-                ledger.record_call(CallRecord(
-                    item_id=item.id, attempt=1, success=result.success,
-                    error_class=type(result.error).__name__ if result.error else "",
-                    duration_seconds=result.duration_seconds,
-                ))
-                ok = result.success
-            else:
-                # Mock: create synthetic image
-                import numpy as np
-                from PIL import Image
-                arr = np.random.randint(180, 255, (512, 512, 3), dtype=np.uint8)
-                Image.fromarray(arr).save(raw_path)
-                ledger.record_call(CallRecord(item_id=item.id, attempt=1, success=True))
-                ok = True
+            max_retries = get_max_retries()
+            for attempt in range(max_retries + 1):
+                if not ledger.can_call(item.id):
+                    break
+                if provider_mode == "real":
+                    from cat_sticker_skill.providers.seedream import SeedreamRequest, generate_image
+                    req = SeedreamRequest(
+                        prompt=prompt,
+                        reference_images=ref_bytes_list,
+                        output_path=raw_path,
+                    )
+                    result = generate_image(
+                        req, api_key=api_key, model=get_seedream_model(),
+                        max_retries=0,
+                        timeout=get_request_timeout(),
+                    )
+                    ledger.record_call(CallRecord(
+                        item_id=item.id, attempt=attempt + 1, success=result.success,
+                        error_class=type(result.error).__name__ if result.error else "",
+                        duration_seconds=result.duration_seconds,
+                    ))
+                    ok = result.success
+                else:
+                    # Mock: create synthetic image (white bg + colored block)
+                    import numpy as np
+                    from PIL import Image
+                    arr = np.full((512, 512, 3), 255, dtype=np.uint8)
+                    arr[100:400, 100:400] = [100, 100, 150]
+                    Image.fromarray(arr).save(raw_path)
+                    ledger.record_call(CallRecord(item_id=item.id, attempt=attempt + 1, success=True))
+                    ok = True
+                    break  # mock always succeeds first try
+
+                if ok:
+                    break
+                # Non-retryable errors stop immediately
+                err_cls = type(result.error).__name__ if result.error else ""
+                if err_cls in ("AuthError", "PermissionError", "InvalidRequestError"):
+                    break
 
             if ok:
                 self._post_process(item, version_dir, version)
                 results[item.id] = {"status": "done", "version": version}
+                done_count += 1
             else:
                 results[item.id] = {"status": "failed"}
+                fail_count += 1
 
         self.manifest.total_paid_generations += ledger.paid_calls_used
         self.manifest.total_retries += ledger.retry_calls_used
         store.save_project(self.manifest)
 
+        # Partial success semantics
+        if fail_count == 0:
+            overall = "success"
+        elif done_count > 0:
+            overall = "partial"
+        else:
+            overall = "failed"
+
         return {
-            "success": True,
+            "success": overall != "failed",
+            "overall_status": overall,
             "results": results,
             "provider_mode": provider_mode,
-            "requests_sent": ledger.requests_sent if hasattr(ledger, 'requests_sent') else ledger.paid_calls_used,
+            "requests_sent": ledger.requests_sent,
             "paid_calls": ledger.paid_calls_used,
             "retry_calls": ledger.retry_calls_used,
             "remaining_budget": ledger.remaining_budget,
@@ -317,6 +356,43 @@ class ProjectController:
         if not v:
             return None
         return Path(v.generated_file)
+
+    def recompose_text(
+        self,
+        sticker_id: str,
+        caption: str | None = None,
+        y_offset: int = 0,
+        x_offset: int = 0,
+        font_scale: float = 1.0,
+    ) -> dict:
+        """Re-compose text on the active version's cutout, no Seedream call.
+
+        Does NOT modify generated.png or cutout.png — only composed.png and final_240.png.
+        """
+        validate_id(sticker_id, "sticker_id")
+        item = self.manifest.stickers.get(sticker_id)
+        if not item or item.active_version == 0:
+            return {"success": False, "error": "No active version"}
+        v = item.versions[item.active_version]
+        cutout = Path(v.cutout_file)
+        composed = cutout.parent / "composed.png"
+        final = cutout.parent / "final_240.png"
+        if not cutout.exists():
+            return {"success": False, "error": "cutout.png missing"}
+
+        from PIL import Image
+
+        from cat_sticker_skill.typography.meme_yellow import TypographyOptions, compose_text
+
+        text = caption if caption is not None else item.caption
+        opts = TypographyOptions(
+            y_offset=y_offset,
+            x_offset=x_offset,
+            font_scale=font_scale,
+        )
+        compose_text(cutout, composed, text, options=opts)
+        Image.open(composed).convert("RGBA").resize((240, 240), Image.LANCZOS).save(final, "PNG")
+        return {"success": True, "file": str(final)}
 
     # --- Resume ---
 

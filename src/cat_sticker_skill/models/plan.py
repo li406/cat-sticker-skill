@@ -20,6 +20,7 @@ class StickerPlanItem:
     status: str = "planned"
     theme: Optional[str] = None
     negative_constraints: List[str] = field(default_factory=list)
+    character_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -34,6 +35,7 @@ class StickerPlanItem:
             "status": self.status,
             "theme": self.theme,
             "negative_constraints": self.negative_constraints,
+            "character_id": self.character_id,
         }
 
 

@@ -113,6 +113,7 @@ def load_plan(project_id: str) -> GenerationPlan:
             status=item.get("status", "planned"),
             theme=item.get("theme", ""),
             negative_constraints=item.get("negative_constraints", []),
+            character_id=item.get("character_id"),
         ))
     return GenerationPlan(
         project_id=data["project_id"],
@@ -127,5 +128,46 @@ def project_path(project_id: str) -> Path:
     return _project_dir(project_id)
 
 
+def list_projects() -> list[str]:
+    """List all project IDs."""
+    root = get_workspace_root() / "projects"
+    if not root.exists():
+        return []
+    return sorted(d.name for d in root.iterdir() if d.is_dir() and (d / "project.json").exists())
+
+
 def sticker_version_dir(project_id: str, sticker_id: str, version: int) -> Path:
     return _project_dir(project_id) / "stickers" / sticker_id / f"v{version:03d}"
+
+
+# --- Reference persistence ---
+
+def refs_dir(project_id: str) -> Path:
+    return _project_dir(project_id) / "refs"
+
+
+def save_ref_mapping(project_id: str, refs: dict) -> None:
+    """Save refs.json mapping: {ref_id: {"file": "refs/r1.jpg"}}"""
+    pdir = _project_dir(project_id)
+    _atomic_write_json(pdir / "refs.json", refs)
+
+
+def load_ref_mapping(project_id: str) -> dict:
+    """Load refs.json mapping."""
+    pdir = _project_dir(project_id)
+    f = pdir / "refs.json"
+    if not f.exists():
+        return {}
+    return _read_json(f)
+
+
+def load_ref_bytes(project_id: str, ref_id: str) -> bytes | None:
+    """Load reference image bytes by ref_id from project refs."""
+    mapping = load_ref_mapping(project_id)
+    entry = mapping.get(ref_id)
+    if not entry:
+        return None
+    fpath = _project_dir(project_id) / entry["file"]
+    if not fpath.exists():
+        return None
+    return fpath.read_bytes()

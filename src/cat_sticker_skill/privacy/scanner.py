@@ -36,6 +36,19 @@ SECRET_PATTERNS = [
     (re.compile(r"Bearer\s+[a-zA-Z0-9\-_]{20,}"), "secret", "Bearer token"),
 ]
 
+# Known fake/test secrets used intentionally in test fixtures
+FAKE_SECRETS = {
+    "sk-abc123def456ghi789jkl012mnop345",
+    "ark-abc123def456ghi789jkl012",
+    "abcdef1234567890abcdef1234567890",
+}
+
+# Regex pattern strings used by the scanner itself (false positives)
+SELF_PATTERNS = {
+    "sk-[a-zA-Z0-9]{20,}",
+    "ark-[a-zA-Z0-9-]{20,}",
+}
+
 PATH_PATTERNS = [
     (re.compile(r"C:\\Users\\[^\s\"']+"), "private_path", "Windows user path"),
     (re.compile(r"/home/[^\s\"']+"), "private_path", "Linux user path"),
@@ -77,10 +90,15 @@ def scan_file(filepath: Path) -> List[PrivacyFinding]:
     for pattern, category, desc in SECRET_PATTERNS:
         for m in pattern.finditer(content):
             val = m.group()
-            # Skip known test fixtures
+            # Skip scanner's own regex patterns (false positives)
+            if val in SELF_PATTERNS:
+                continue
+            # Skip known fake/test secrets only when scanning test files
+            in_tests = "tests" in filepath.parts
+            if in_tests and val in FAKE_SECRETS:
+                continue
             if "deadbeef" in val or "your-api-key" in val or "example" in val.lower():
                 continue
-            # Do NOT print the actual secret value — just report existence
             findings.append(PrivacyFinding("HIGH", category, f"Possible {desc} found (value redacted)", str(filepath)))
 
     for pattern, category, desc in PATH_PATTERNS:
@@ -125,14 +143,19 @@ def scan_repo(repo_root: Path) -> PrivacyReport:
     for filepath in tracked:
         if not filepath.exists():
             continue
-        # Skip test fixtures — they intentionally contain fake secrets to test the scanner
-        if "tests" in filepath.parts:
-            continue
+        # Scanner's own source: its regex patterns are intentional, not real secrets
+        is_scanner_source = filepath.name == "scanner.py"
+        # No blanket skip of tests/ — scan them, but downgrade secrets in test fixtures
+        in_tests = "tests" in filepath.parts
         suffix = filepath.suffix.lower()
-        # .env, .env.local, .env.production, etc. — always scan
-        is_env_file = filepath.name.startswith(".env")
-        if suffix in TEXT_EXTENSIONS or is_env_file:
-            report.findings.extend(scan_file(filepath))
+        if suffix in TEXT_EXTENSIONS or filepath.name.startswith(".env"):
+            findings = scan_file(filepath)
+            # Downgrade HIGH secrets in scanner source and test files to MEDIUM
+            if is_scanner_source or in_tests:
+                for f in findings:
+                    if f.severity == "HIGH":
+                        f.severity = "MEDIUM"
+            report.findings.extend(findings)
         elif suffix in IMAGE_EXTENSIONS:
             report.findings.extend(check_image_exif(filepath))
 

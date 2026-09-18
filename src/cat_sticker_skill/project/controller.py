@@ -432,6 +432,7 @@ class ProjectController:
         x_offset: int = 0,
         font_scale: float = 1.0,
         preset: str | None = None,
+        vertical_position: str | None = None,
     ) -> dict:
         """Re-compose text on the active version's cutout, no Seedream call.
 
@@ -483,6 +484,8 @@ class ProjectController:
             x_offset=x_offset,
             font_scale=font_scale,
         )
+        if vertical_position is not None:
+            opts.vertical_position = vertical_position
         compose_text(cutout, composed, text, options=opts, preset=preset)
         Image.open(composed).convert("RGBA").resize((240, 240), Image.LANCZOS).save(final, "PNG")
         return {"success": True, "file": str(final), "approval_invalidated": approval_invalidated}

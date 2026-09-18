@@ -91,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
     ta.add_argument("--font-scale", type=float, default=1.0)
     ta.add_argument("--caption", default=None)
     ta.add_argument("--preset", default=None)
+    ta.add_argument("--vertical-position", choices=["top", "center", "bottom"], default=None,
+                    help="Place text at top/center/bottom (Agent picks based on subject position)")
     ta.add_argument("--project", required=True)
 
     # resume
@@ -297,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
         result = c.recompose_text(
             args.sticker_id, caption=args.caption,
             y_offset=args.y_offset, x_offset=args.x_offset, font_scale=args.font_scale,
-            preset=args.preset,
+            preset=args.preset, vertical_position=args.vertical_position,
         )
         print(f"Success: {result.get('success')}")
         if result.get("file"):

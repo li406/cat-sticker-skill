@@ -37,3 +37,32 @@ def test_text_is_visible(tmp_path):
     yellow_pixels = ((bottom[:,:,0] > 200) & (bottom[:,:,1] > 150) & (bottom[:,:,2] < 100)).sum()
     assert yellow_pixels > 0, "Should have yellow text pixels at bottom"
 
+
+
+def test_vertical_position_top(tmp_path):
+    """Text should appear in the top band when vertical_position=top."""
+    import numpy as np
+    input_path = tmp_path / "input.png"
+    Image.new("RGBA", (200, 200), (255, 255, 255, 255)).save(input_path)
+
+    out_bottom = tmp_path / "bottom.png"
+    out_top = tmp_path / "top.png"
+    compose_text(input_path, out_bottom, "test", preset="meme-yellow",
+                 options=TypographyOptions(vertical_position="bottom"))
+    compose_text(input_path, out_top, "test", preset="meme-yellow",
+                 options=TypographyOptions(vertical_position="top"))
+
+    arr_b = np.array(Image.open(out_bottom))
+    arr_t = np.array(Image.open(out_top))
+    # Non-white text pixels
+    def nonwhite(a):
+        return (a[:,:,:3].min(axis=2) < 240).sum()
+    # bottom variant: text should be near bottom
+    bottom_y_nonwhite_b = nonwhite(arr_b[160:195])
+    top_y_nonwhite_b = nonwhite(arr_b[5:40])
+    assert bottom_y_nonwhite_b > 0 and top_y_nonwhite_b == 0
+
+    # top variant: text should be near top, not bottom
+    bottom_y_nonwhite_t = nonwhite(arr_t[160:195])
+    top_y_nonwhite_t = nonwhite(arr_t[5:40])
+    assert top_y_nonwhite_t > 0 and bottom_y_nonwhite_t == 0

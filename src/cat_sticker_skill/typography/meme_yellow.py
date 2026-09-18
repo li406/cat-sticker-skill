@@ -21,9 +21,11 @@ class TypographyOptions:
     max_width_ratio: float = 0.90
     line_spacing: float = 0.15
     alignment: str = "center"  # center, left, right
+    vertical_position: str = "bottom"  # top | center | bottom — chosen by Agent from subject position
     x_offset: int = 0
     y_offset: int = 0
     bottom_margin_ratio: float = 0.06
+    top_margin_ratio: float = 0.06
     max_lines: int = 2
     auto_wrap: bool = True
 
@@ -176,7 +178,13 @@ def compose_text(
             line_heights.append(bbox[3] - bbox[1])
         total_h = sum(line_heights) + (len(lines) - 1) + int(new_size * options.line_spacing)
 
-    start_y = h - total_h - int(h * options.bottom_margin_ratio) + options.y_offset
+    # Vertical placement: Agent picks where the subject is NOT, so text never covers it.
+    if options.vertical_position == "top":
+        start_y = int(h * options.top_margin_ratio) + options.y_offset
+    elif options.vertical_position == "center":
+        start_y = (h - total_h) // 2 + options.y_offset
+    else:  # bottom (default)
+        start_y = h - total_h - int(h * options.bottom_margin_ratio) + options.y_offset
 
     y = start_y
     for i, line in enumerate(lines):

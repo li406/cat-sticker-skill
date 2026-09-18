@@ -4,19 +4,24 @@
 
 | ID | 问题 | 用户影响 | 何时再处理 |
 |---|---|---|---|
-| IMP-001 | Banner 图目前是从首张主图 crop/resize 出来的，观感像"强行拉伸"，不像专门设计的横版横幅 | 微信主页横幅难看，影响整个表情包页面观感 | Stage 1 验收时若 Owner 明确觉得 banner 不行，当场修；否则进 Stage 2 |
-| IMP-002 | 透明底主图在某些背景下残留白边，flood-fill 抠图不透彻 | 微信聊天里表情边缘发灰/发白 | Stage 2 用真实猫图做 legacy vs precompose 私人回归，选定默认策略 |
-| IMP-003 | 豆包办公任务环境是否能自动发现 SKILL.md 未实测 | 换个新对话能不能直接用这个 skill | Stage 1 验收顺带记录；Stage 3 写进兼容文档 |
-| IMP-004 | 长文案/两行文案换行、文字 max-width 回归 | 文案长时排版溢出或挡住猫 | Stage 2 排版打磨时统一处理 |
+| IMP-001 | Banner 图目前是从首张主图 crop/resize 出来的，观感像"强行拉伸"，不像专门设计的横版横幅 | 微信主页横幅难看 | Stage 1 已接受现状；若以后成为新痛点，由 Owner 单独提 |
+| IMP-003 | 豆包办公任务环境是否能自动发现 SKILL.md 未实测 | 新对话能不能直接用这个 skill | Stage 3 开源前实测并写进兼容文档 |
 
 ## Polish
 
 | ID | 问题 | 原因 | 建议 |
 |---|---|---|---|
-| POL-001 | Codex 环境双端验收 | Owner 已明确决定不做 Codex 端口 | 永久搁置，除非 Owner 重新提起 |
-| POL-002 | 更多排版 preset（clean-white / cute-soft / bold-contrast） | 目前主要靠 auto | Stage 2 按需加，不预先铺 |
+| POL-001 | Codex 环境双端验收 | Owner 已明确决定不做 Codex 端口 | 永久搁置 |
 | POL-003 | 联系表 preview、运行 summary 的视觉美化 | 当前功能可用但朴素 | Stage 3 开源前再说 |
 | POL-004 | Pillow `getdata()` DeprecationWarning | 升级 Pillow 14 前的警告 | 下次动到该文件时顺手改 |
+
+## 已纳入当前 Stage（Stage 2）
+
+以下条目原属 Backlog，现已提升为 Stage 2 必须项，从 Backlog 移出：
+
+- ~~IMP-002 透明底白边（legacy vs precompose 私人回归）~~ → Stage 2 必须项
+- ~~IMP-004 长文案/两行文案排版回归~~ → Stage 2 必须项
+- ~~POL-002 更多排版 preset（clean-white / cute-soft / bold-contrast）~~ → Stage 2 至少落地一种新风格
 
 ## Future Ideas
 

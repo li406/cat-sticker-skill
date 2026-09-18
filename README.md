@@ -13,6 +13,20 @@ You give the Agent one or more cat photos. It:
 6. Removes background to transparent PNG
 7. Exports a WeChat-ready ZIP package
 
+## Requirements
+
+- Python 3.11+
+- A Volcengine / Ark API key with Seedream access
+- A CJK font on the system (auto-detected)
+
+## Install
+
+```bash
+git clone https://github.com/li406/cat-sticker-skill.git
+cd cat-sticker-skill
+pip install -e .
+```
+
 ## Quick Start
 
 ```bash
@@ -34,6 +48,18 @@ cat-sticker generate --project my-cats
 cat-sticker package --project my-cats
 ```
 
+## Use with an AI Agent
+
+This project is **Agent-native**: the host AI agent does visual understanding, planning, and caption writing; the CLI does the paid generation and deterministic image processing.
+
+Point your agent at this repo and tell it:
+
+> "Read SKILL.md and follow its workflow. These are my cat photos: [attach]. Plan a sticker set, show me before spending money."
+
+The agent will read `SKILL.md`, examine your photos, propose a plan, and wait for your approval before any paid API call.
+
+See `references/agent-compatibility.md` for what has actually been tested.
+
 ## CLI Commands
 
 | Command | Description |
@@ -52,7 +78,7 @@ cat-sticker package --project my-cats
 | `cat-sticker regenerate <id> --project <p> [--dry-run]` | Regenerate single sticker |
 | `cat-sticker versions <id> --project <p>` | List versions |
 | `cat-sticker activate-version <id> <v> --project <p>` | Activate a version |
-| `cat-sticker text-adjust <id> --project <p> [--y-offset N] [--font-scale F]` | Re-compose text locally |
+| `cat-sticker text-adjust <id> --project <p> [--y-offset N] [--font-scale F] [--vertical-position top|center|bottom]` | Re-compose text locally (no paid API) |
 | `cat-sticker resume --project <p>` | Resume pending |
 | `cat-sticker validate --project <p>` | Validate output |
 | `cat-sticker package --project <p> --out <dir>` | Export WeChat ZIP |
@@ -82,6 +108,14 @@ PolyForm Noncommercial 1.0.0. No commercial use without permission.
 
 This tool helps you create the files. WeChat sticker platform approval is not guaranteed.
 
+## Compatibility
+
+See `references/agent-compatibility.md`. In short:
+
+- **Verified end-to-end**: Doubao desktop agent on Windows with real cat photos and real Seedream.
+- **Mock CI**: Ubuntu (Python 3.11/3.12) and Windows (Python 3.11) via GitHub Actions.
+- **Not verified**: Codex and other agents (SKILL.md is written to be agent-agnostic, but untested).
+
 ## Status
 
-v1 release candidate — engineering / mock E2E passed. Awaiting owner Doubao + private cat + real Seedream acceptance.
+v1.0 - owner-tested. Two real sticker sets made, one uploaded to WeChat.

@@ -1,33 +1,38 @@
-# Agent Compatibility
+# Agent & Environment Compatibility
 
-## Status Matrix
+This document lists what has **actually been tested**.
+Anything not listed here is **not verified** — it may work, but the author has not tried it.
 
-| Capability | Implemented | Dry-Run Verified | Owner Real-World Verified |
+## Host Agents (real paid generation)
+
+| Agent | OS | Status | Notes |
 |---|---|---|---|
-| Project create/load/save | Yes | Yes | AWAITING_OWNER_TEST |
-| Generation Plan | Yes | Yes | AWAITING_OWNER_TEST |
-| Approval gate | Yes | Yes | AWAITING_OWNER_TEST |
-| Budget/ledger | Yes | Yes | AWAITING_OWNER_TEST |
-| Seedream provider | Yes | Mock only | AWAITING_OWNER_TEST |
-| Flood-fill matting | Yes | Yes | AWAITING_OWNER_TEST |
-| Typography | Yes | Yes | AWAITING_OWNER_TEST |
-| Version management | Yes | Yes | AWAITING_OWNER_TEST |
-| WeChat export | Yes | Yes | AWAITING_OWNER_TEST |
-| Resume/rollback | Yes | Yes | AWAITING_OWNER_TEST |
-| Privacy scanner | Yes | Yes | AWAITING_OWNER_TEST |
+| Doubao desktop agent (豆包办公任务) | Windows 11 | **Verified** | End-to-end: real cat photos -> Seedream -> WeChat ZIP, Stage 1 & Stage 2 acceptance passed |
+| OpenAI Codex / other coding agents | - | **Not tested** | SKILL.md is written agent-agnostic, but no real paid run has been done |
 
-## Target Environment
+How to use with an arbitrary agent:
+1. Clone the repo, `pip install -e .`
+2. Set `ARK_API_KEY`
+3. Tell the agent: "Read SKILL.md and follow its workflow"
+4. The agent should then examine reference photos, build a plan, wait for your approval, and only then call `cat-sticker generate`.
 
-- **Primary**: 豆包电脑版 / 豆包 App 办公任务
-- **Future**: Codex (not required for v1)
+## CI / Headless (mock only, no paid API)
 
-## How to Load
+| Platform | Python | Status |
+|---|---|---|
+| Ubuntu (GitHub Actions) | 3.11, 3.12 | Mock E2E (smoke-test) passes |
+| Windows | 3.11 | Mock E2E passes |
 
-In a new 豆包 office task, tell the Agent:
-> Read the SKILL.md in this repo and follow its workflow to generate cat stickers.
+## Runtime
 
-## Notes
+- Python 3.11+ (tested on 3.11; 3.12 in CI)
+- Dependencies: Pillow, NumPy (see pyproject.toml)
+- CJK font required at runtime (auto-detected; see README)
+- Image generation requires a Volcengine / Ark API key with Seedream access
 
-- Codex compatibility is future / not required for current v1
-- Real paid Seedream calls require `ARK_API_KEY` set in environment
-- Private cat photos are never stored in the repo
+## Known Limitations
+
+- No GIF / animated output (v1)
+- No web UI - CLI only
+- Single image provider (Seedream / Ark)
+- Private photos are never uploaded; they live in your local workspace

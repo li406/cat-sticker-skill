@@ -31,7 +31,10 @@ pip install -e .
 
 ```bash
 # 1. Set your API key (do NOT paste it into chat)
+# bash / macOS / Linux:
 export ARK_API_KEY=your-key-here
+# PowerShell (Windows):
+$env:ARK_API_KEY="your-key-here"
 
 # 2. Check installation
 cat-sticker doctor
